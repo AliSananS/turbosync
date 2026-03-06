@@ -74,10 +74,15 @@ async function handleRoomApi(
       );
     }
 
-    const roomId = body.name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-    const stub = env.ROOM.get(env.ROOM.idFromName(roomId));
-    const result = await stub.createRoom(body.name);
-    return jsonResponse(result, 200);
+    const slug = body.name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+    const stub = env.ROOM.get(env.ROOM.idFromName(slug));
+    const result = await stub.createRoom(body.name, body.password);
+    return jsonResponse({ ...result, slug }, 200);
   }
 
   // GET /api/room/:roomId

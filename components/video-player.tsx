@@ -67,6 +67,7 @@ export interface VideoPlayerClassNames {
 export type VideoPlayerSize = "sm" | "md" | "lg";
 
 export interface VideoPlayerProps {
+  children?: React.ReactNode;
   /** Video source URL */
   src: string;
   /** Poster image URL */
@@ -244,6 +245,7 @@ export const VideoPlayer = React.forwardRef<
       renderTimeDisplay,
       renderExtraControlsLeft,
       renderExtraControlsRight,
+      children,
     },
     ref,
   ) => {
@@ -605,6 +607,7 @@ export const VideoPlayer = React.forwardRef<
             }
           }}
         >
+          {children}
           <source src={src} type="video/mp4" />
           {subTitlesFile && (
             <track

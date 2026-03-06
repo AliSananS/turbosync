@@ -1,4 +1,3 @@
-import { DurableObject } from "cloudflare:workers";
 import type {
   User,
   RoomState,
@@ -7,6 +6,7 @@ import type {
   CreateRoomResponse,
   RoomStateResponse,
 } from "@/types";
+import { DurableObject } from "cloudflare:workers";
 
 // ─── Session attachment (serialized onto each WebSocket) ───────────
 interface SessionAttachment {
@@ -43,19 +43,25 @@ export class Room extends DurableObject<Env> {
   }
 
   // ─── RPC: Create / initialize room metadata ─────────────────────
-  async createRoom(name: string): Promise<CreateRoomResponse> {
-    const existing = await this.ctx.storage.get<string>("name");
-    if (existing) {
-      // Room already exists — return current state
-      return { roomId: this.ctx.id.toString(), name: existing };
-    }
-
-    await this.ctx.storage.put({
+  async createRoom(
+    name: string,
+    password?: string,
+  ): Promise<CreateRoomResponse> {
+    const initialData: Record<string, any> = {
       name,
       paused: true,
       currentTime: 0,
       playbackRate: 1,
-    });
+    };
+
+    if (password) {
+      initialData.password = password;
+    } else {
+      // Clear password if not provided (making it a public room)
+      await this.ctx.storage.delete("password");
+    }
+
+    await this.ctx.storage.put(initialData);
 
     return { roomId: this.ctx.id.toString(), name };
   }
@@ -199,6 +205,18 @@ export class Room extends DurableObject<Env> {
     session: SessionAttachment,
     msg: Extract<WSClientMessage, { type: "join" }>,
   ): Promise<void> {
+    const expectedPassword = await this.ctx.storage.get<string>("password");
+    if (expectedPassword && msg.password !== expectedPassword) {
+      this.send(ws, {
+        type: "error",
+        code: "UNAUTHORIZED",
+        message: "Invalid room password",
+      });
+      ws.close(1008, "Invalid room password");
+      this.sessions.delete(ws);
+      return;
+    }
+
     // Update session with real user info
     session.displayName = msg.user.displayName;
     session.avatar = msg.user.avatar;

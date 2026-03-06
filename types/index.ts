@@ -39,7 +39,7 @@ export type WSClientMessageType =
   | "playback-rate";
 
 export type WSClientMessage =
-  | { type: "join"; user: Omit<User, "id"> }
+  | { type: "join"; user: Omit<User, "id">; password?: string }
   | { type: "leave" }
   | { type: "play"; currentTime: number }
   | { type: "pause"; currentTime: number }
@@ -78,6 +78,7 @@ export type WSServerMessage =
 
 export interface CreateRoomRequest {
   name: string;
+  password?: string;
 }
 
 export interface CreateRoomResponse {
