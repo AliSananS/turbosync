@@ -33,6 +33,8 @@ export interface VideoPlayerHandle {
   getVolume: () => number;
   isMuted: () => boolean;
   isPaused: () => boolean;
+  getVideoWidth: () => number;
+  getVideoHeight: () => number;
 }
 
 export interface VideoPlayerClassNames {
@@ -311,6 +313,8 @@ export const VideoPlayer = React.forwardRef<
         getVolume: () => videoRef.current?.volume ?? 0,
         isMuted: () => videoRef.current?.muted ?? false,
         isPaused: () => videoRef.current?.paused ?? true,
+        getVideoWidth: () => videoRef.current?.videoWidth ?? 0,
+        getVideoHeight: () => videoRef.current?.videoHeight ?? 0,
       };
 
       if (typeof ref === "function") {
