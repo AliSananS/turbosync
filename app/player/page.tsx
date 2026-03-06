@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import VideoPlayer from "@/components/video-player";
-import type { VideoPlayerHandle } from "@/types";
+import type { VideoPlayerHandle } from "@/components/video-player";
 
 export default function PlayerPage() {
   const [videoSrc, setVideoSrc] = useState<string>("");
