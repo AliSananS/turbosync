@@ -13,13 +13,23 @@ export default function Home() {
   const [tab, setTab] = useState<"create" | "join">("create");
 
   // Create room state
-  const [createDisplayName, setCreateDisplayName] = useState("");
+  const [createDisplayName, setCreateDisplayName] = useState(
+    () =>
+      (typeof window !== "undefined"
+        ? localStorage.getItem("turbosync_name")
+        : "") || "",
+  );
   const [roomName, setRoomName] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
   // Join room state
-  const [joinDisplayName, setJoinDisplayName] = useState("");
+  const [joinDisplayName, setJoinDisplayName] = useState(
+    () =>
+      (typeof window !== "undefined"
+        ? localStorage.getItem("turbosync_name")
+        : "") || "",
+  );
   const [joinRoomName, setJoinRoomName] = useState("");
   const [joinPassword, setJoinPassword] = useState("");
 
@@ -35,14 +45,24 @@ export default function Home() {
     e.preventDefault();
     if (!roomName.trim() || !createDisplayName.trim()) return;
 
-    setLoading(true);
     try {
+      // Save displayName for next time
+      localStorage.setItem("turbosync_name", createDisplayName.trim());
+
+      // Get or create persistent peerId
+      let hostPeerId = localStorage.getItem("turbosync_peerid");
+      if (!hostPeerId) {
+        hostPeerId = crypto.randomUUID();
+        localStorage.setItem("turbosync_peerid", hostPeerId);
+      }
+
       const res = await fetch("/api/room/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: roomName.trim(),
           password: password.trim() || undefined,
+          hostPeerId,
         }),
       });
 
@@ -50,13 +70,14 @@ export default function Home() {
 
       const data = (await res.json()) as { slug: string };
 
-      // Store credentials in sessionStorage (not URL) for the room-client to read
-      sessionStorage.setItem(
+      // Store credentials in localStorage
+      localStorage.setItem(
         `join:${data.slug}`,
         JSON.stringify({
           displayName: createDisplayName.trim(),
           password: password.trim() || undefined,
           isHost: true,
+          peerId: hostPeerId,
         }),
       );
 
@@ -94,13 +115,24 @@ export default function Home() {
       return;
     }
 
-    // Store credentials in sessionStorage
-    sessionStorage.setItem(
+    // Save displayName for next time
+    localStorage.setItem("turbosync_name", joinDisplayName.trim());
+
+    // Get or create persistent peerId
+    let peerId = localStorage.getItem("turbosync_peerid");
+    if (!peerId) {
+      peerId = crypto.randomUUID();
+      localStorage.setItem("turbosync_peerid", peerId);
+    }
+
+    // Store credentials in localStorage
+    localStorage.setItem(
       `join:${roomSlug}`,
       JSON.stringify({
         displayName: joinDisplayName.trim(),
         password: joinPassword.trim() || undefined,
         isHost: false,
+        peerId,
       }),
     );
 

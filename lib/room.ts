@@ -12,6 +12,7 @@ import { DurableObject } from "cloudflare:workers";
 // ─── Session attachment (serialized onto each WebSocket) ───────────
 interface SessionAttachment {
   userId: string;
+  peerId: string;
   displayName: string;
   avatar?: string;
   isHost: boolean;
@@ -57,6 +58,7 @@ export class Room extends DurableObject<Env> {
   async createRoom(
     name: string,
     password?: string,
+    hostPeerId?: string,
   ): Promise<CreateRoomResponse> {
     // Guard: don't overwrite an active room with connected users
     const existingName = await this.ctx.storage.get<string>("name");
@@ -79,6 +81,10 @@ export class Room extends DurableObject<Env> {
 
     // Set default permissions
     initialData.permissions = DEFAULT_PERMISSIONS;
+
+    if (hostPeerId) {
+      initialData.hostPeerId = hostPeerId;
+    }
 
     await this.ctx.storage.put(initialData);
 
@@ -115,8 +121,9 @@ export class Room extends DurableObject<Env> {
     const userId = crypto.randomUUID();
     const attachment: SessionAttachment = {
       userId,
+      peerId: "", // Will be set on Join
       displayName: "Anonymous",
-      isHost: this.sessions.size === 0,
+      isHost: false, // Will be set on Join
     };
     server.serializeAttachment(attachment);
     this.sessions.set(server, attachment);
@@ -266,10 +273,35 @@ export class Room extends DurableObject<Env> {
       return;
     }
 
+    const hostPeerId = await this.ctx.storage.get<string>("hostPeerId");
+    const hasActiveHost = Array.from(this.sessions.values()).some(
+      (s) => s.isHost && s.peerId !== msg.user.peerId,
+    );
+
+    let isHost = msg.user.isHost;
+
+    if (hostPeerId) {
+      // If a hostPeerId exists, only a matching peerId can be host
+      if (msg.user.peerId === hostPeerId) {
+        isHost = true;
+      } else {
+        isHost = false;
+      }
+    } else if (isHost) {
+      // If no hostPeerId exists yet, the first person who claims to be host sets it
+      await this.ctx.storage.put("hostPeerId", msg.user.peerId);
+    }
+
+    // Double check: if there's already an active host (different peer), demote this one
+    if (isHost && hasActiveHost) {
+      isHost = false;
+    }
+
     // Update session with real user info
     session.displayName = msg.user.displayName;
+    session.peerId = msg.user.peerId;
     session.avatar = msg.user.avatar;
-    session.isHost = msg.user.isHost;
+    session.isHost = isHost;
     ws.serializeAttachment(session);
     this.sessions.set(ws, session);
 
@@ -496,6 +528,7 @@ export class Room extends DurableObject<Env> {
   private sessionToUser(session: SessionAttachment): User {
     return {
       id: session.userId,
+      peerId: session.peerId,
       displayName: session.displayName,
       avatar: session.avatar,
       isHost: session.isHost,

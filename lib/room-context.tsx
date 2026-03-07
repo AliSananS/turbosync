@@ -21,7 +21,11 @@ interface RoomContextType {
   isConnected: boolean;
   latency: number;
   error: string | null;
-  connect: (roomId: string, user: Omit<User, "id">, password?: string) => void;
+  connect: (
+    roomId: string,
+    user: Omit<User, "id"> & { peerId?: string },
+    password?: string,
+  ) => void;
   disconnect: () => void;
   play: (currentTime: number) => void;
   pause: (currentTime: number) => void;
@@ -46,27 +50,69 @@ export function RoomProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const connectionParamsRef = useRef<{
+    roomId: string;
+    user: Omit<User, "id"> & { peerId?: string };
+    password?: string;
+  } | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pingStartRef = useRef<number>(0);
 
-  const disconnect = useCallback(() => {
+  // Helper: Get or create persistent peerId
+  const getPeerId = useCallback(() => {
+    if (typeof window === "undefined") return "";
+    let pid = localStorage.getItem("turbosync_peerid");
+    if (!pid) {
+      pid = crypto.randomUUID();
+      localStorage.setItem("turbosync_peerid", pid);
+    }
+    return pid;
+  }, []);
+
+  const disconnect = useCallback((clearParams = true) => {
     if (wsRef.current) {
+      // Remove handlers before closing to prevent unwanted reconnects during intentional disconnect
+      wsRef.current.onclose = null;
+      wsRef.current.onerror = null;
       wsRef.current.close();
       wsRef.current = null;
+    }
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
     }
     if (pingIntervalRef.current) {
       clearInterval(pingIntervalRef.current);
     }
+    if (clearParams) {
+      connectionParamsRef.current = null;
+      reconnectAttemptsRef.current = 0;
+    }
     setIsConnected(false);
     setRoomState(null);
     setCurrentUser(null);
-    setError(null);
+    // Don't clear error if we're disconnecting due to an error,
+    // but clear it if it's a fresh start
+    if (clearParams) setError(null);
   }, []);
 
   const connect = useCallback(
-    (roomId: string, user: Omit<User, "id">, password?: string) => {
-      disconnect();
-      setError(null);
+    (
+      roomId: string,
+      user: Omit<User, "id"> & { peerId?: string },
+      password?: string,
+    ) => {
+      // Save params for reconnection
+      connectionParamsRef.current = { roomId, user, password };
+
+      // Ensure peerId is present
+      const joinUser = {
+        ...user,
+        peerId: user.peerId || getPeerId(),
+      };
+
+      disconnect(false); // Close existing but keep params
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${window.location.host}/ws/${roomId}`;
@@ -76,9 +122,12 @@ export function RoomProvider({ children }: { children: ReactNode }) {
 
       ws.onopen = () => {
         setIsConnected(true);
+        setError(null);
+        reconnectAttemptsRef.current = 0;
+
         const joinMessage: WSClientMessage = {
           type: "join",
-          user,
+          user: joinUser,
           password,
         };
         ws.send(JSON.stringify(joinMessage));
@@ -200,7 +249,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
 
             case "kicked":
               setError(msg.reason);
-              disconnect();
+              disconnect(true); // Intentional kick = stop reconnecting
               break;
 
             case "chat":
@@ -209,7 +258,13 @@ export function RoomProvider({ children }: { children: ReactNode }) {
 
             case "error":
               console.error("Room error:", msg.message);
-              setError(msg.message);
+              // Only stop reconnecting if it's an auth/not-found error
+              if (msg.code === "UNAUTHORIZED" || msg.code === "NOT_FOUND") {
+                setError(msg.message);
+                disconnect(true);
+              } else {
+                setError(msg.message);
+              }
               break;
           }
         } catch (err) {
@@ -217,17 +272,36 @@ export function RoomProvider({ children }: { children: ReactNode }) {
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         setIsConnected(false);
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+
+        // Attempt reconnection if not closed intentionally
+        if (event.code !== 1000 && connectionParamsRef.current) {
+          const delay = Math.min(
+            1000 * Math.pow(2, reconnectAttemptsRef.current),
+            10000,
+          );
+          reconnectAttemptsRef.current += 1;
+          setError(
+            `Connection lost. Retrying in ${Math.round(delay / 1000)}s...`,
+          );
+
+          reconnectTimeoutRef.current = setTimeout(() => {
+            const params = connectionParamsRef.current;
+            if (params) {
+              connect(params.roomId, params.user, params.password);
+            }
+          }, delay);
+        }
       };
 
       ws.onerror = () => {
-        setError("Connection failed. The room may not exist.");
         setIsConnected(false);
+        // Error handler mostly triggers before close, let onclose handle the retry logic
       };
     },
-    [disconnect],
+    [disconnect, getPeerId],
   );
 
   const sendWS = useCallback((msg: WSClientMessage) => {

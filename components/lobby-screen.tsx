@@ -12,7 +12,12 @@ interface LobbyScreenProps {
 }
 
 export function LobbyScreen({ onJoin, roomName }: LobbyScreenProps) {
-  const [displayName, setDisplayName] = useState("");
+  const [displayName, setDisplayName] = useState(
+    () =>
+      (typeof window !== "undefined"
+        ? localStorage.getItem("turbosync_name")
+        : "") || "",
+  );
   const [password, setPassword] = useState("");
 
   const handleJoinRoom = (e: React.FormEvent) => {
@@ -23,10 +28,10 @@ export function LobbyScreen({ onJoin, roomName }: LobbyScreenProps) {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-[#FAFAFA] dark:bg-[#050505]">
-      <div className="w-full max-w-[420px] bg-white dark:bg-[#0A0A0A] rounded-2xl shadow-[0_4px_12px_rgba(0,0,0,0.03),0_1px_2px_rgba(0,0,0,0.02)] border border-[#EAEAEA] dark:border-[#1F1F23] overflow-hidden">
+      <div className="w-full max-w-105 bg-white dark:bg-[#0A0A0A] rounded-2xl shadow-[0_4px_12px_rgba(0,0,0,0.03),0_1px_2px_rgba(0,0,0,0.02)] border border-[#EAEAEA] dark:border-[#1F1F23] overflow-hidden">
         {/* Header / Media Area */}
         <div className="relative w-full aspect-video bg-black group cursor-default">
-          <div className="absolute inset-0 bg-gradient-to-br from-[#111] to-[#333] flex items-center justify-center">
+          <div className="absolute inset-0 bg-linear-to-br from-[#111] to-[#333] flex items-center justify-center">
             <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center border border-white/30">
               <Play className="text-white fill-current w-6 h-6 ml-1" />
             </div>

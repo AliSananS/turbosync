@@ -85,7 +85,11 @@ async function handleRoomApi(
 
     const slug = toSlug(body.name);
     const stub = env.ROOM.get(env.ROOM.idFromName(slug));
-    const result = await stub.createRoom(body.name, body.password);
+    const result = await stub.createRoom(
+      body.name,
+      body.password,
+      body.hostPeerId,
+    );
     return jsonResponse({ ...result, slug }, 200);
   }
 

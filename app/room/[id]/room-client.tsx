@@ -46,13 +46,17 @@ function RoomController({ roomId }: { roomId: string }) {
   useEffect(() => {
     if (roomExists === false || hasJoined) return;
 
-    // Try sessionStorage first (secure path)
-    const stored = sessionStorage.getItem(`join:${roomId}`);
+    // Try localStorage first
+    const stored = localStorage.getItem(`join:${roomId}`);
     if (stored) {
       try {
-        const { displayName, password, isHost } = JSON.parse(stored);
-        sessionStorage.removeItem(`join:${roomId}`);
-        connect(roomId, { displayName, isHost: isHost || false }, password);
+        const { displayName, password, isHost, peerId } = JSON.parse(stored);
+        // We keep the credentials in localStorage for re-refreshes/reconnects
+        connect(
+          roomId,
+          { displayName, isHost: isHost || false, peerId },
+          password,
+        );
         setHasJoined(true);
         return;
       } catch {
@@ -120,7 +124,26 @@ function RoomController({ roomId }: { roomId: string }) {
       <LobbyScreen
         roomName={roomId.replace(/-/g, " ").toUpperCase()}
         onJoin={(displayName, _avatar, password) => {
-          connect(roomId, { displayName, isHost: false }, password);
+          // Save for future auto-joins
+          const pid =
+            localStorage.getItem("turbosync_peerid") || crypto.randomUUID();
+          localStorage.setItem("turbosync_peerid", pid);
+          localStorage.setItem("turbosync_name", displayName);
+          localStorage.setItem(
+            `join:${roomId}`,
+            JSON.stringify({
+              displayName,
+              password,
+              isHost: false,
+              peerId: pid,
+            }),
+          );
+
+          connect(
+            roomId,
+            { displayName, isHost: false, peerId: pid },
+            password,
+          );
           setHasJoined(true);
         }}
       />
