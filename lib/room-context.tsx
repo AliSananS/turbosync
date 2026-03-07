@@ -171,7 +171,18 @@ export function RoomProvider({ children }: { children: ReactNode }) {
             }
 
             case "sync":
-              setRoomState(msg.room);
+              setRoomState((prev) => {
+                if (!prev) return msg.room;
+                // Preserve 'away' users that aren't in the new snapshot
+                const onlineIds = new Set(msg.room.users.map((u) => u.id));
+                const awayUsers = prev.users.filter(
+                  (u) => u.connectionStatus === "away" && !onlineIds.has(u.id),
+                );
+                return {
+                  ...msg.room,
+                  users: [...msg.room.users, ...awayUsers],
+                };
+              });
               break;
 
             case "user-joined":
@@ -193,7 +204,11 @@ export function RoomProvider({ children }: { children: ReactNode }) {
                 prev
                   ? {
                       ...prev,
-                      users: prev.users.filter((u) => u.id !== msg.userId),
+                      users: prev.users.map((u) =>
+                        u.id === msg.userId
+                          ? { ...u, connectionStatus: "away" as const }
+                          : u,
+                      ),
                     }
                   : null,
               );
