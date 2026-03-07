@@ -59,6 +59,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pingStartRef = useRef<number>(0);
+  const lastPongReceivedAtRef = useRef<number>(0);
 
   // Helper: Get or create persistent peerId
   const getPeerId = useCallback(() => {
@@ -133,8 +134,18 @@ export function RoomProvider({ children }: { children: ReactNode }) {
         ws.send(JSON.stringify(joinMessage));
 
         // Start pinging for latency measurement
+        lastPongReceivedAtRef.current = performance.now();
         pingIntervalRef.current = setInterval(() => {
-          pingStartRef.current = performance.now();
+          const now = performance.now();
+          // If we haven't received a pong in over 5s, assume connection is dead
+          if (now - lastPongReceivedAtRef.current > 5000) {
+            console.warn("Pong timeout, force closing for reconnection...");
+            if (wsRef.current) {
+              wsRef.current.close(); // Triggers onclose and auto-reconnect
+            }
+            return;
+          }
+          pingStartRef.current = now;
           ws.send("ping");
         }, 2000);
       };
@@ -142,9 +153,9 @@ export function RoomProvider({ children }: { children: ReactNode }) {
       ws.onmessage = (event) => {
         // Handle automatic pong
         if (typeof event.data === "string" && event.data === "pong") {
-          const currentLatency = Math.round(
-            performance.now() - pingStartRef.current,
-          );
+          const now = performance.now();
+          lastPongReceivedAtRef.current = now;
+          const currentLatency = Math.round(now - pingStartRef.current);
           setLatency(currentLatency);
           setLatencyHistory((prev) => {
             const newHistory = [...prev, currentLatency];

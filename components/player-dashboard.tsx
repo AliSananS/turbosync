@@ -60,11 +60,13 @@ function ActiveMembersTable({
   activeUsers,
   currentUser,
   latency,
+  isConnected,
   roomState,
 }: {
   activeUsers: User[];
   currentUser: User | null;
   latency: number;
+  isConnected: boolean;
   roomState: any; // Assuming roomState is passed down
 }) {
   return (
@@ -261,11 +263,13 @@ function DashboardHeader({
   isDark,
   toggleDark,
   latency,
+  isConnected,
 }: {
   roomName: string;
   isDark: boolean;
   toggleDark: () => void;
   latency: number;
+  isConnected: boolean;
 }) {
   return (
     <header className="w-full h-14 flex items-center justify-between px-4 md:px-6 border-b border-[#E5E7EB] dark:border-[#1F1F23] bg-[#FFFFFF] dark:bg-[#0A0A0A] transition-colors duration-200 sticky top-0 z-50">
@@ -282,9 +286,11 @@ function DashboardHeader({
       <div className="flex items-center gap-2 md:gap-4">
         <div className="flex items-center gap-1.5 md:gap-2 text-[10px] md:text-[11px] font-semibold text-[#6B7280] dark:text-[#A1A1AA] uppercase tracking-wider">
           <span
-            className={`w-1.5 h-1.5 rounded-full ${latency < 200 ? "bg-green-500" : "bg-amber-500"} animate-pulse`}
+            className={`w-1.5 h-1.5 rounded-full ${isConnected ? (latency < 200 ? "bg-green-500" : "bg-amber-500") : "bg-red-500"} animate-pulse`}
           ></span>
-          <span className="font-mono">{latency}ms</span>
+          <span className="font-mono">
+            {isConnected ? `${latency}ms` : "reconnecting..."}
+          </span>
         </div>
         <div className="h-4 w-px bg-[#E5E7EB] dark:bg-[#1F1F23] mx-0.5 md:mx-1"></div>
 
@@ -307,6 +313,7 @@ export function PlayerDashboard() {
   const {
     roomState,
     currentUser,
+    isConnected,
     latency,
     play,
     pause,
@@ -423,6 +430,7 @@ export function PlayerDashboard() {
         isDark={isDark}
         toggleDark={() => setIsDark(!isDark)}
         latency={latency}
+        isConnected={isConnected}
       />
 
       <main className="flex-1 w-full max-w-350 mx-auto p-4 md:p-6 space-y-6">
@@ -650,10 +658,10 @@ export function PlayerDashboard() {
                     Ping
                   </span>
                   <span className="text-xs font-bold text-[#111827] dark:text-[#EDEDED]">
-                    {latency}ms
+                    {isConnected ? `${latency}ms` : "reconnecting..."}
                   </span>
                   <span
-                    className={`w-1.5 h-1.5 rounded-full ${latency < 100 ? "bg-green-500" : latency < 300 ? "bg-amber-500" : "bg-red-500"}`}
+                    className={`w-1.5 h-1.5 rounded-full ${isConnected ? (latency < 100 ? "bg-green-500" : latency < 300 ? "bg-amber-500" : "bg-red-500") : "bg-red-500"}`}
                   ></span>
                 </div>
                 <div className="h-3 w-px bg-[#E5E7EB] dark:bg-[#1F1F23]"></div>
@@ -679,6 +687,7 @@ export function PlayerDashboard() {
         <ActiveMembersTable
           activeUsers={activeUsers}
           currentUser={currentUser}
+          isConnected={isConnected}
           latency={latency}
           roomState={roomState}
         />
