@@ -6,22 +6,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Video, Plus, LogIn } from "lucide-react";
+import { toast } from "sonner";
 
 export default function Home() {
   const router = useRouter();
   const [tab, setTab] = useState<"create" | "join">("create");
-  const [selectedAvatar, setSelectedAvatar] = useState("bg-blue-500");
 
   // Create room state
-  const [roomName, setRoomName] = useState("");
   const [createDisplayName, setCreateDisplayName] = useState("");
+  const [roomName, setRoomName] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
   // Join room state
+  const [joinDisplayName, setJoinDisplayName] = useState("");
   const [joinRoomName, setJoinRoomName] = useState("");
   const [joinPassword, setJoinPassword] = useState("");
-  const [joinDisplayName, setJoinDisplayName] = useState("");
 
   const slug = (name: string) =>
     name
@@ -50,31 +50,61 @@ export default function Home() {
 
       const data = (await res.json()) as { slug: string };
 
-      // Redirect with credentials so the owner auto-joins as host
-      const params = new URLSearchParams();
-      params.set("displayName", createDisplayName.trim());
-      params.set("avatar", selectedAvatar);
-      params.set("host", "1");
-      if (password.trim()) params.set("password", password.trim());
+      // Store credentials in sessionStorage (not URL) for the room-client to read
+      sessionStorage.setItem(
+        `join:${data.slug}`,
+        JSON.stringify({
+          displayName: createDisplayName.trim(),
+          password: password.trim() || undefined,
+          isHost: true,
+        }),
+      );
 
-      router.push(`/room/${data.slug}?${params.toString()}`);
+      router.push(`/room/${data.slug}`);
     } catch (err) {
       console.error(err);
-      alert("Error creating room");
+      toast.error("Failed to create room", {
+        description: "Please try again.",
+      });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleJoinRoom = (e: React.FormEvent) => {
+  const handleJoinRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!joinRoomName.trim() || !joinDisplayName.trim()) return;
+
     const roomSlug = slug(joinRoomName);
-    const params = new URLSearchParams();
-    params.set("displayName", joinDisplayName.trim());
-    params.set("avatar", selectedAvatar);
-    if (joinPassword.trim()) params.set("password", joinPassword.trim());
-    router.push(`/room/${roomSlug}?${params.toString()}`);
+
+    // Validate room exists before navigating
+    try {
+      const res = await fetch(`/api/room/${roomSlug}/exists`);
+      const data = (await res.json()) as { exists: boolean };
+      if (!data.exists) {
+        toast.error("Room not found", {
+          description: `"${joinRoomName}" doesn't exist. Check the name or create a new room.`,
+        });
+        return;
+      }
+    } catch {
+      toast.error("Failed to check room", {
+        description: "Network error. Please try again.",
+      });
+      return;
+    }
+
+    // Store credentials in sessionStorage
+    sessionStorage.setItem(
+      `join:${roomSlug}`,
+      JSON.stringify({
+        displayName: joinDisplayName.trim(),
+        password: joinPassword.trim() || undefined,
+        isHost: false,
+      }),
+    );
+
+    router.push(`/room/${roomSlug}`);
   };
 
   return (
@@ -113,39 +143,25 @@ export default function Home() {
         {tab === "create" && (
           <form onSubmit={handleCreateRoom} className="px-8 pb-8 space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="createDisplayName">Your Display Name</Label>
+              <Label htmlFor="createDisplayName">Display Name</Label>
               <Input
                 id="createDisplayName"
-                placeholder="e.g. Ali"
+                placeholder="What should we call you?"
                 value={createDisplayName}
                 onChange={(e) => setCreateDisplayName(e.target.value)}
                 required
                 className="bg-gray-50 dark:bg-[#111111] border-[#EAEAEA] dark:border-[#1F1F23]"
               />
+              <p className="text-[11px] text-[#999] dark:text-[#555]">
+                This is how other viewers will see you in the room.
+              </p>
             </div>
-            <div className="space-y-2">
-              <Label>Choose Avatar</Label>
-              <div className="flex gap-2 py-1">
-                {[
-                  "bg-blue-500",
-                  "bg-red-500",
-                  "bg-green-500",
-                  "bg-purple-500",
-                ].map((color) => (
-                  <button
-                    key={color}
-                    type="button"
-                    onClick={() => setSelectedAvatar(color)}
-                    className={`w-8 h-8 rounded-full ${color} border-2 ${selectedAvatar === color ? "border-black dark:border-white scale-110" : "border-transparent opacity-70 hover:opacity-100"} transition-all`}
-                  />
-                ))}
-              </div>
-            </div>
+
             <div className="space-y-2">
               <Label htmlFor="roomName">Room Name</Label>
               <Input
                 id="roomName"
-                placeholder="e.g. mr-robot-ali"
+                placeholder="e.g. friday-movie-night"
                 value={roomName}
                 onChange={(e) => setRoomName(e.target.value)}
                 required
@@ -155,17 +171,24 @@ export default function Home() {
                 URL: /room/{slug(roomName) || "..."}
               </p>
             </div>
+
             <div className="space-y-2">
               <Label htmlFor="password">Password (optional)</Label>
               <Input
                 id="password"
                 type="password"
-                placeholder="Leave blank for public room"
+                autoFocus={false}
+                autoComplete="off"
+                placeholder="Leave blank for a public room"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="bg-gray-50 dark:bg-[#111111] border-[#EAEAEA] dark:border-[#1F1F23]"
               />
+              <p className="text-[11px] text-[#999] dark:text-[#555]">
+                If set, viewers must enter this password to join.
+              </p>
             </div>
+
             <Button
               type="submit"
               className="w-full h-11 mt-2 bg-[#111111] hover:bg-black dark:bg-white dark:text-black dark:hover:bg-gray-200"
@@ -182,56 +205,52 @@ export default function Home() {
         {tab === "join" && (
           <form onSubmit={handleJoinRoom} className="px-8 pb-8 space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="joinRoom">Room Name</Label>
-              <Input
-                id="joinRoom"
-                placeholder="e.g. mr-robot-ali"
-                value={joinRoomName}
-                onChange={(e) => setJoinRoomName(e.target.value)}
-                required
-                className="bg-gray-50 dark:bg-[#111111] border-[#EAEAEA] dark:border-[#1F1F23]"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Choose Avatar</Label>
-              <div className="flex gap-2 py-1">
-                {[
-                  "bg-blue-500",
-                  "bg-red-500",
-                  "bg-green-500",
-                  "bg-purple-500",
-                ].map((color) => (
-                  <button
-                    key={color}
-                    type="button"
-                    onClick={() => setSelectedAvatar(color)}
-                    className={`w-8 h-8 rounded-full ${color} border-2 ${selectedAvatar === color ? "border-black dark:border-white scale-110" : "border-transparent opacity-70 hover:opacity-100"} transition-all`}
-                  />
-                ))}
-              </div>
-            </div>
-            <div className="space-y-2">
               <Label htmlFor="joinDisplayName">Display Name</Label>
               <Input
                 id="joinDisplayName"
-                placeholder="Your name"
+                placeholder="What should we call you?"
                 value={joinDisplayName}
                 onChange={(e) => setJoinDisplayName(e.target.value)}
                 required
                 className="bg-gray-50 dark:bg-[#111111] border-[#EAEAEA] dark:border-[#1F1F23]"
               />
+              <p className="text-[11px] text-[#999] dark:text-[#555]">
+                Your name as shown to the host and other viewers.
+              </p>
             </div>
+
             <div className="space-y-2">
-              <Label htmlFor="joinPassword">Room Password (if required)</Label>
+              <Label htmlFor="joinRoom">Room Name</Label>
+              <Input
+                id="joinRoom"
+                placeholder="e.g. friday-movie-night"
+                value={joinRoomName}
+                onChange={(e) => setJoinRoomName(e.target.value)}
+                required
+                className="bg-gray-50 dark:bg-[#111111] border-[#EAEAEA] dark:border-[#1F1F23]"
+              />
+              <p className="text-[11px] text-[#999] dark:text-[#555]">
+                Enter the exact room name shared by the host.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="joinPassword">Room Password</Label>
               <Input
                 id="joinPassword"
                 type="password"
-                placeholder="Leave blank if public"
+                autoFocus={false}
+                autoComplete="off"
+                placeholder="Leave blank if the room is public"
                 value={joinPassword}
                 onChange={(e) => setJoinPassword(e.target.value)}
                 className="bg-gray-50 dark:bg-[#111111] border-[#EAEAEA] dark:border-[#1F1F23]"
               />
+              <p className="text-[11px] text-[#999] dark:text-[#555]">
+                Required only if the host set a password.
+              </p>
             </div>
+
             <Button
               type="submit"
               className="w-full h-11 mt-2 bg-[#111111] hover:bg-black dark:bg-white dark:text-black dark:hover:bg-gray-200"

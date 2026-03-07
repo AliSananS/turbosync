@@ -17,10 +17,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/* ------------------------------------------------------------------ */
-/*  Types (self-contained — no external @/types dependency)            */
-/* ------------------------------------------------------------------ */
-
 export interface VideoPlayerHandle {
   play: () => void;
   pause: () => void;
@@ -28,41 +24,31 @@ export interface VideoPlayerHandle {
   setVolume: (volume: number) => void;
   toggleMute: () => void;
   toggleFullscreen: () => void;
+  toggleSubtitles: () => void;
   getCurrentTime: () => number;
   getDuration: () => number;
   getVolume: () => number;
   isMuted: () => boolean;
   isPaused: () => boolean;
+  areSubtitlesVisible: () => boolean;
+  hasSubtitles: () => boolean;
   getVideoWidth: () => number;
   getVideoHeight: () => number;
 }
 
 export interface VideoPlayerClassNames {
-  /** Root container */
   root?: string;
-  /** The <video> element */
   video?: string;
-  /** Controls overlay wrapper */
   overlay?: string;
-  /** Progress bar track */
   progressTrack?: string;
-  /** Progress bar filled portion */
   progressFill?: string;
-  /** Progress bar thumb/handle */
   progressThumb?: string;
-  /** Bottom controls bar */
   controlsBar?: string;
-  /** Left control group */
   controlsLeft?: string;
-  /** Right control group */
   controlsRight?: string;
-  /** Individual control button */
   button?: string;
-  /** Volume slider track */
   volumeTrack?: string;
-  /** Volume slider fill */
   volumeFill?: string;
-  /** Time display text */
   timeDisplay?: string;
 }
 
@@ -70,86 +56,46 @@ export type VideoPlayerSize = "sm" | "md" | "lg";
 
 export interface VideoPlayerProps {
   children?: React.ReactNode;
-  /** Video source URL */
   src: string;
-  /** Poster image URL */
   poster?: string;
-  /** Subtitles file URL (.vtt) */
   subTitlesFile?: string;
-  /** Subtitles language code */
   subtitlesLang?: string;
-  /** Auto-play on mount */
   autoPlay?: boolean;
-  /** Loop playback */
   loop?: boolean;
-  /** Start muted */
   muted?: boolean;
-  /** Show built-in controls overlay */
   showControls?: boolean;
-  /** Preload behavior */
   preload?: "auto" | "metadata" | "none";
-
-  // --- Customization ---
-
-  /** Size preset affecting padding & icon sizing */
   size?: VideoPlayerSize;
-  /** Accent color for progress bar & active states (any valid CSS color) */
   accentColor?: string;
-  /** Class name overrides for sub-elements */
   classNames?: VideoPlayerClassNames;
-  /** Additional className for root container */
   className?: string;
-  /** Controls auto-hide delay in ms (0 = never hide) */
   controlsTimeout?: number;
-  /** Seek step in seconds for keyboard arrows */
   seekStep?: number;
-  /** Volume step for keyboard arrows (0-1) */
   volumeStep?: number;
-  /** Disable keyboard shortcuts */
   disableKeyboardShortcuts?: boolean;
-
-  // --- Callbacks ---
-
-  /** Fired when playback starts */
   onPlay?: () => void;
-  /** Fired when playback pauses */
   onPause?: () => void;
-  /** Fired when currentTime updates */
   onTimeUpdate?: (currentTime: number, duration: number) => void;
-  /** Fired when video metadata is loaded */
   onLoadedMetadata?: (duration: number) => void;
-  /** Fired when video ends */
   onEnded?: () => void;
-  /** Fired when volume changes */
   onVolumeChange?: (volume: number, muted: boolean) => void;
-  /** Fired when fullscreen state changes */
   onFullscreenChange?: (isFullscreen: boolean) => void;
-  /** Fired when seeking */
   onSeek?: (time: number) => void;
-
-  // --- Render Slots ---
-
-  /** Replace the play/pause button */
   renderPlayButton?: (
     isPlaying: boolean,
     toggle: () => void,
   ) => React.ReactNode;
-  /** Replace the mute button */
   renderMuteButton?: (isMuted: boolean, toggle: () => void) => React.ReactNode;
-  /** Replace the fullscreen button */
   renderFullscreenButton?: (
     isFullscreen: boolean,
     toggle: () => void,
   ) => React.ReactNode;
-  /** Replace the time display */
   renderTimeDisplay?: (
     currentTime: number,
     duration: number,
     formatted: { current: string; total: string },
   ) => React.ReactNode;
-  /** Render extra controls in the left group */
   renderExtraControlsLeft?: () => React.ReactNode;
-  /** Render extra controls in the right group */
   renderExtraControlsRight?: () => React.ReactNode;
 }
 
@@ -267,7 +213,9 @@ export const VideoPlayer = React.forwardRef<
     const [showControlsUI, setShowControlsUI] = useState(true);
     const [isDraggingProgress, setIsDraggingProgress] = useState(false);
     const [hoverProgress, setHoverProgress] = useState<number | null>(null);
+    const [hoverTime, setHoverTime] = useState<number | null>(null);
     const [isDraggingVolume, setIsDraggingVolume] = useState(false);
+    const [subtitlesVisible, setSubtitlesVisible] = useState(true);
 
     const sizePreset = SIZE_STYLES[size];
 
@@ -308,11 +256,14 @@ export const VideoPlayer = React.forwardRef<
         },
         toggleMute: () => handleMuteToggle(),
         toggleFullscreen: () => handleFullscreen(),
+        toggleSubtitles: () => handleSubtitleToggle(),
         getCurrentTime: () => videoRef.current?.currentTime ?? 0,
         getDuration: () => videoRef.current?.duration ?? 0,
         getVolume: () => videoRef.current?.volume ?? 0,
         isMuted: () => videoRef.current?.muted ?? false,
         isPaused: () => videoRef.current?.paused ?? true,
+        areSubtitlesVisible: () => subtitlesVisible,
+        hasSubtitles: () => !!subTitlesFile,
         getVideoWidth: () => videoRef.current?.videoWidth ?? 0,
         getVideoHeight: () => videoRef.current?.videoHeight ?? 0,
       };
@@ -373,6 +324,16 @@ export const VideoPlayer = React.forwardRef<
         containerRef.current.requestFullscreen?.().catch(() => {});
       } else {
         document.exitFullscreen?.().catch(() => {});
+      }
+    }, []);
+
+    const handleSubtitleToggle = useCallback(() => {
+      if (!videoRef.current) return;
+      const track = videoRef.current.textTracks[0];
+      if (track) {
+        const newVisible = track.mode !== "showing";
+        track.mode = newVisible ? "showing" : "disabled";
+        setSubtitlesVisible(newVisible);
       }
     }, []);
 
@@ -673,8 +634,12 @@ export const VideoPlayer = React.forwardRef<
                 const pct =
                   clamp((e.clientX - rect.left) / rect.width, 0, 1) * 100;
                 setHoverProgress(pct);
+                setHoverTime((pct / 100) * duration);
               }}
-              onMouseLeave={() => setHoverProgress(null)}
+              onMouseLeave={() => {
+                setHoverProgress(null);
+                setHoverTime(null);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "ArrowLeft") {
                   e.preventDefault();
@@ -694,6 +659,18 @@ export const VideoPlayer = React.forwardRef<
                   className="absolute inset-y-0 left-0 rounded-full bg-white/20"
                   style={{ width: `${hoverProgress}%` }}
                 />
+              )}
+
+              {/* Hover timestamp tooltip */}
+              {hoverProgress !== null && hoverTime !== null && (
+                <div
+                  className="absolute -top-8 -translate-x-1/2 pointer-events-none z-10"
+                  style={{ left: `${hoverProgress}%` }}
+                >
+                  <span className="px-1.5 py-0.5 rounded bg-black/90 text-white text-[10px] font-mono whitespace-nowrap shadow-md">
+                    {formatTime(hoverTime)}
+                  </span>
+                </div>
               )}
 
               {/* Filled progress */}

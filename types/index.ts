@@ -1,3 +1,11 @@
+// ─── Permissions ───────────────────────────────────────────────────
+export interface RoomPermissions {
+  /** Whether viewers can play/pause/seek (default: true) */
+  viewersCanControl: boolean;
+  /** Whether viewers can send chat messages (default: true) */
+  viewersCanChat: boolean;
+}
+
 // ─── User ──────────────────────────────────────────────────────────
 export interface User {
   /** Unique session ID (generated on connect) */
@@ -8,6 +16,10 @@ export interface User {
   avatar?: string;
   /** Whether this user created the room */
   isHost: boolean;
+  /** Connection status */
+  connectionStatus?: "online" | "away";
+  /** User's current local video timestamp (seconds) */
+  videoTimestamp?: number;
 }
 
 // ─── Room ──────────────────────────────────────────────────────────
@@ -24,19 +36,11 @@ export interface RoomState {
   paused: boolean;
   /** Playback rate (1 = normal) */
   playbackRate: number;
+  /** Room permissions */
+  permissions: RoomPermissions;
 }
 
 // ─── WebSocket: Client → Server ────────────────────────────────────
-
-export type WSClientMessageType =
-  | "join"
-  | "leave"
-  | "play"
-  | "pause"
-  | "seek"
-  | "chat"
-  | "sync-request"
-  | "playback-rate";
 
 export type WSClientMessage =
   | { type: "join"; user: Omit<User, "id">; password?: string }
@@ -46,21 +50,15 @@ export type WSClientMessage =
   | { type: "seek"; currentTime: number }
   | { type: "chat"; message: string }
   | { type: "sync-request" }
-  | { type: "playback-rate"; rate: number };
+  | { type: "playback-rate"; rate: number }
+  | { type: "time-update"; currentTime: number }
+  | { type: "kick"; userId: string }
+  | {
+      type: "update-permissions";
+      permissions: Partial<RoomPermissions>;
+    };
 
 // ─── WebSocket: Server → Client ────────────────────────────────────
-
-export type WSServerMessageType =
-  | "user-joined"
-  | "user-left"
-  | "play"
-  | "pause"
-  | "seek"
-  | "chat"
-  | "sync"
-  | "error"
-  | "room-state"
-  | "playback-rate";
 
 export type WSServerMessage =
   | { type: "user-joined"; user: User }
@@ -71,8 +69,11 @@ export type WSServerMessage =
   | { type: "chat"; message: string; userId: string; displayName: string }
   | { type: "sync"; room: RoomState }
   | { type: "error"; code: string; message: string }
-  | { type: "room-state"; room: RoomState }
-  | { type: "playback-rate"; rate: number; userId: string };
+  | { type: "room-state"; room: RoomState; yourUserId: string }
+  | { type: "playback-rate"; rate: number; userId: string }
+  | { type: "kicked"; reason: string }
+  | { type: "permissions-updated"; permissions: RoomPermissions }
+  | { type: "user-time-update"; userId: string; currentTime: number };
 
 // ─── REST API ──────────────────────────────────────────────────────
 
@@ -88,6 +89,10 @@ export interface CreateRoomResponse {
 
 export interface RoomStateResponse {
   room: RoomState;
+}
+
+export interface RoomExistsResponse {
+  exists: boolean;
 }
 
 export interface ApiErrorResponse {

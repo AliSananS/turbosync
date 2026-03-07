@@ -1,5 +1,9 @@
 import handler from "vinext/server/app-router-entry";
-import type { CreateRoomRequest, ApiErrorResponse } from "@/types";
+import type {
+  CreateRoomRequest,
+  ApiErrorResponse,
+  RoomExistsResponse,
+} from "@/types";
 
 // Re-export the Durable Object class so wrangler can discover it
 export { Room } from "@/lib/room";
@@ -15,7 +19,7 @@ export default {
 
     // ─── WebSocket upgrade: GET /ws/:roomId ───────────────────────
     if (path.startsWith("/ws/")) {
-      const roomId = path.slice(4); // strip "/ws/"
+      const roomId = path.slice(4);
       if (!roomId) {
         return jsonResponse<ApiErrorResponse>(
           { error: "Room ID is required in path: /ws/:roomId" },
@@ -23,7 +27,6 @@ export default {
         );
       }
 
-      // Validate it's a WebSocket upgrade
       const upgrade = request.headers.get("Upgrade");
       if (!upgrade || upgrade !== "websocket") {
         return jsonResponse<ApiErrorResponse>(
@@ -32,7 +35,13 @@ export default {
         );
       }
 
+      // Validate room exists before proxying
       const stub = env.ROOM.get(env.ROOM.idFromName(roomId));
+      const exists = await stub.exists();
+      if (!exists) {
+        return jsonResponse<ApiErrorResponse>({ error: "Room not found" }, 404);
+      }
+
       return stub.fetch(request);
     }
 
@@ -74,15 +83,19 @@ async function handleRoomApi(
       );
     }
 
-    const slug = body.name
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "");
+    const slug = toSlug(body.name);
     const stub = env.ROOM.get(env.ROOM.idFromName(slug));
     const result = await stub.createRoom(body.name, body.password);
     return jsonResponse({ ...result, slug }, 200);
+  }
+
+  // GET /api/room/:roomId/exists
+  const existsMatch = path.match(/^\/api\/room\/([^/]+)\/exists$/);
+  if (existsMatch && request.method === "GET") {
+    const roomId = existsMatch[1];
+    const stub = env.ROOM.get(env.ROOM.idFromName(roomId));
+    const exists = await stub.exists();
+    return jsonResponse<RoomExistsResponse>({ exists }, 200);
   }
 
   // GET /api/room/:roomId
@@ -90,7 +103,8 @@ async function handleRoomApi(
   if (match && request.method === "GET") {
     const roomId = match[1];
     const stub = env.ROOM.get(env.ROOM.idFromName(roomId));
-    if (!stub) {
+    const exists = await stub.exists();
+    if (!exists) {
       return jsonResponse<ApiErrorResponse>({ error: "Room not found" }, 404);
     }
     const result = await stub.getRoomState();
@@ -101,6 +115,15 @@ async function handleRoomApi(
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────
+
+function toSlug(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
 
 function jsonResponse<T>(data: T, status: number): Response {
   return new Response(JSON.stringify(data), {

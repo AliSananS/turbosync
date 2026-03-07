@@ -10,6 +10,7 @@ import React, {
 import type {
   User,
   RoomState,
+  RoomPermissions,
   WSClientMessage,
   WSServerMessage,
 } from "@/types";
@@ -28,6 +29,9 @@ interface RoomContextType {
   sendMessage: (message: string) => void;
   setPlaybackRate: (rate: number) => void;
   syncRequest: () => void;
+  kick: (userId: string) => void;
+  updatePermissions: (perms: Partial<RoomPermissions>) => void;
+  reportTimeUpdate: (currentTime: number) => void;
   latencyHistory: number[];
 }
 
@@ -64,7 +68,6 @@ export function RoomProvider({ children }: { children: ReactNode }) {
       disconnect();
       setError(null);
 
-      // Determine WebSocket URL based on current protocol
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${window.location.host}/ws/${roomId}`;
 
@@ -73,7 +76,6 @@ export function RoomProvider({ children }: { children: ReactNode }) {
 
       ws.onopen = () => {
         setIsConnected(true);
-        // Send join message
         const joinMessage: WSClientMessage = {
           type: "join",
           user,
@@ -108,16 +110,19 @@ export function RoomProvider({ children }: { children: ReactNode }) {
           const msg = JSON.parse(event.data) as WSServerMessage;
 
           switch (msg.type) {
-            case "room-state":
+            case "room-state": {
+              setRoomState(msg.room);
+              // Server tells us our userId — use it to find ourselves in the user list
+              const myId = msg.yourUserId;
+              const me = msg.room.users.find((u) => u.id === myId);
+              if (me) {
+                setCurrentUser(me);
+              }
+              break;
+            }
+
             case "sync":
               setRoomState(msg.room);
-              // On initial join, if we don't have a full user object, try to find ourselves
-              if (currentUser && !currentUser.id) {
-                const me = msg.room.users.find(
-                  (u) => u.displayName === currentUser.displayName,
-                );
-                if (me) setCurrentUser(me);
-              }
               break;
 
             case "user-joined":
@@ -173,8 +178,32 @@ export function RoomProvider({ children }: { children: ReactNode }) {
               );
               break;
 
+            case "permissions-updated":
+              setRoomState((prev) =>
+                prev ? { ...prev, permissions: msg.permissions } : null,
+              );
+              break;
+
+            case "user-time-update":
+              setRoomState((prev) => {
+                if (!prev) return null;
+                return {
+                  ...prev,
+                  users: prev.users.map((u) =>
+                    u.id === msg.userId
+                      ? { ...u, videoTimestamp: msg.currentTime }
+                      : u,
+                  ),
+                };
+              });
+              break;
+
+            case "kicked":
+              setError(msg.reason);
+              disconnect();
+              break;
+
             case "chat":
-              // To be implemented in UI
               console.log(`Chat from ${msg.displayName}: ${msg.message}`);
               break;
 
@@ -193,66 +222,86 @@ export function RoomProvider({ children }: { children: ReactNode }) {
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
       };
 
-      // Keep optimistic current user until server assigns fully
-      setCurrentUser(user as User);
+      ws.onerror = () => {
+        setError("Connection failed. The room may not exist.");
+        setIsConnected(false);
+      };
     },
     [disconnect],
   );
 
-  const play = useCallback((currentTime: number) => {
+  const sendWS = useCallback((msg: WSClientMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({ type: "play", currentTime } as WSClientMessage),
-      );
+      wsRef.current.send(JSON.stringify(msg));
+    }
+  }, []);
+
+  const play = useCallback(
+    (currentTime: number) => {
+      sendWS({ type: "play", currentTime });
       setRoomState((prev) =>
         prev ? { ...prev, paused: false, currentTime } : null,
       );
-    }
-  }, []);
+    },
+    [sendWS],
+  );
 
-  const pause = useCallback((currentTime: number) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({ type: "pause", currentTime } as WSClientMessage),
-      );
+  const pause = useCallback(
+    (currentTime: number) => {
+      sendWS({ type: "pause", currentTime });
       setRoomState((prev) =>
         prev ? { ...prev, paused: true, currentTime } : null,
       );
-    }
-  }, []);
+    },
+    [sendWS],
+  );
 
-  const seek = useCallback((currentTime: number) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({ type: "seek", currentTime } as WSClientMessage),
-      );
+  const seek = useCallback(
+    (currentTime: number) => {
+      sendWS({ type: "seek", currentTime });
       setRoomState((prev) => (prev ? { ...prev, currentTime } : null));
-    }
-  }, []);
+    },
+    [sendWS],
+  );
 
-  const sendMessage = useCallback((message: string) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({ type: "chat", message } as WSClientMessage),
-      );
-    }
-  }, []);
+  const sendMessage = useCallback(
+    (message: string) => {
+      sendWS({ type: "chat", message });
+    },
+    [sendWS],
+  );
 
-  const setPlaybackRate = useCallback((rate: number) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({ type: "playback-rate", rate } as WSClientMessage),
-      );
-    }
-  }, []);
+  const setPlaybackRate = useCallback(
+    (rate: number) => {
+      sendWS({ type: "playback-rate", rate });
+    },
+    [sendWS],
+  );
 
   const syncRequest = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({ type: "sync-request" } as WSClientMessage),
-      );
-    }
-  }, []);
+    sendWS({ type: "sync-request" });
+  }, [sendWS]);
+
+  const kick = useCallback(
+    (userId: string) => {
+      sendWS({ type: "kick", userId });
+    },
+    [sendWS],
+  );
+
+  const updatePermissions = useCallback(
+    (perms: Partial<RoomPermissions>) => {
+      sendWS({ type: "update-permissions", permissions: perms });
+    },
+    [sendWS],
+  );
+
+  const reportTimeUpdate = useCallback(
+    (currentTime: number) => {
+      sendWS({ type: "time-update", currentTime });
+    },
+    [sendWS],
+  );
 
   useEffect(() => {
     return () => {
@@ -277,6 +326,9 @@ export function RoomProvider({ children }: { children: ReactNode }) {
         sendMessage,
         setPlaybackRate,
         syncRequest,
+        kick,
+        updatePermissions,
+        reportTimeUpdate,
       }}
     >
       {children}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
@@ -9,26 +10,58 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
 import { useRoom } from "@/lib/room-context";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Settings2, Users, Search, MoreVertical, Ban } from "lucide-react";
+import { Settings2, Users, Ban, Shield } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 
 export function PeerPermissionsDialog({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { roomState, currentUser } = useRoom();
+  const { roomState, currentUser, kick, updatePermissions } = useRoom();
   const users = roomState?.users || [];
+  const permissions = roomState?.permissions;
+  const isHost = currentUser?.isHost ?? false;
+
+  const [chatEnabled, setChatEnabled] = useState(
+    permissions?.viewersCanChat ?? true,
+  );
+  const [controlEnabled, setControlEnabled] = useState(
+    permissions?.viewersCanControl ?? true,
+  );
+  const [open, setOpen] = useState(false);
+
+  // Sync local state when dialog opens
+  const handleOpenChange = useCallback(
+    (isOpen: boolean) => {
+      setOpen(isOpen);
+      if (isOpen && permissions) {
+        setChatEnabled(permissions.viewersCanChat);
+        setControlEnabled(permissions.viewersCanControl);
+      }
+    },
+    [permissions],
+  );
+
+  const handleSave = () => {
+    updatePermissions({
+      viewersCanChat: chatEnabled,
+      viewersCanControl: controlEnabled,
+    });
+    toast.success("Permissions updated");
+    setOpen(false);
+  };
+
+  const handleKick = (userId: string, displayName: string) => {
+    kick(userId);
+    toast.success(`Kicked ${displayName}`);
+  };
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>{children}</DialogTrigger>
       <DialogContent className="sm:max-w-2xl bg-[#FFFFFF] dark:bg-[#0A0A0A] border-[#E5E7EB] dark:border-[#1F1F23] p-0 overflow-hidden flex flex-col max-h-[90vh]">
         <DialogHeader className="px-6 py-5 border-b border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50/50 dark:bg-[#111111]/50 text-left">
@@ -36,7 +69,9 @@ export function PeerPermissionsDialog({
             Peer Permissions
           </DialogTitle>
           <DialogDescription className="text-xs text-[#6B7280] dark:text-[#A1A1AA] mt-1">
-            Manage access control and participant capabilities for this session.
+            {isHost
+              ? "Manage access control and participant capabilities."
+              : "View current room permissions. Only the host can change settings."}
           </DialogDescription>
         </DialogHeader>
 
@@ -58,7 +93,11 @@ export function PeerPermissionsDialog({
                     Participants can send messages
                   </span>
                 </div>
-                <Switch defaultChecked />
+                <Switch
+                  checked={chatEnabled}
+                  onCheckedChange={setChatEnabled}
+                  disabled={!isHost}
+                />
               </div>
 
               <div className="flex items-center justify-between p-3 rounded-lg border border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50 dark:bg-[#111111]">
@@ -70,33 +109,24 @@ export function PeerPermissionsDialog({
                     Viewers can pause/seek
                   </span>
                 </div>
-                <Switch />
+                <Switch
+                  checked={controlEnabled}
+                  onCheckedChange={setControlEnabled}
+                  disabled={!isHost}
+                />
               </div>
             </div>
           </div>
 
-          {/* Participants Table Section */}
+          {/* Participants Table */}
           <div className="px-6 py-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xs font-bold text-[#111827] dark:text-[#EDEDED] uppercase tracking-wider flex items-center gap-2">
-                <Users size={16} />
-                Participants
-                <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-gray-100 dark:bg-gray-800 text-[#6B7280] border border-[#E5E7EB] dark:border-[#1F1F23]">
-                  {users.length} Active
-                </span>
-              </h3>
-
-              <div className="relative">
-                <span className="absolute inset-y-0 left-0 flex items-center pl-2">
-                  <Search size={16} className="text-gray-400" />
-                </span>
-                <input
-                  type="text"
-                  placeholder="Search user..."
-                  className="pl-8 pr-3 py-1.5 text-xs bg-gray-50 dark:bg-[#111111] border border-[#E5E7EB] dark:border-[#1F1F23] rounded-md focus:ring-1 focus:ring-black dark:focus:ring-white focus:border-transparent w-48 placeholder-gray-400 dark:placeholder-gray-600 outline-none text-[#111827] dark:text-[#EDEDED]"
-                />
-              </div>
-            </div>
+            <h3 className="text-xs font-bold text-[#111827] dark:text-[#EDEDED] uppercase tracking-wider flex items-center gap-2 mb-4">
+              <Users size={16} />
+              Participants
+              <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-gray-100 dark:bg-gray-800 text-[#6B7280] border border-[#E5E7EB] dark:border-[#1F1F23]">
+                {users.length} Active
+              </span>
+            </h3>
 
             <div className="border border-[#E5E7EB] dark:border-[#1F1F23] rounded-lg overflow-hidden">
               <table className="w-full text-left text-sm">
@@ -119,9 +149,7 @@ export function PeerPermissionsDialog({
                       >
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-3">
-                            <div
-                              className={`w-8 h-8 rounded-full ${user.avatar || "bg-gradient-to-br from-gray-400 to-gray-500"} flex items-center justify-center text-white text-[10px] font-black border border-white/20 shadow-sm`}
-                            >
+                            <div className="w-8 h-8 rounded-full bg-linear-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white text-[10px] font-black border border-white/20 shadow-sm">
                               {user.displayName.substring(0, 2).toUpperCase()}
                             </div>
                             <div className="flex flex-col">
@@ -133,40 +161,36 @@ export function PeerPermissionsDialog({
                               </span>
                             </div>
                             {isMe && (
-                              <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] h-4 px-1.5 py-0 border-blue-500/30 text-blue-500"
+                              >
                                 You
-                              </span>
+                              </Badge>
                             )}
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          <Select
-                            defaultValue={user.isHost ? "host" : "viewer"}
-                            disabled={user.isHost}
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] ${user.isHost ? "border-amber-500/30 text-amber-500" : "border-gray-300 dark:border-gray-700 text-[#6B7280]"}`}
                           >
-                            <SelectTrigger className="h-7 text-xs border-0 bg-transparent ring-1 ring-inset ring-gray-200 dark:ring-[#1F1F23] focus:ring-1 focus:ring-black dark:focus:ring-white">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="viewer">Viewer</SelectItem>
-                              <SelectItem value="moderator">
-                                Moderator
-                              </SelectItem>
-                              <SelectItem value="host">Host</SelectItem>
-                            </SelectContent>
-                          </Select>
+                            {user.isHost ? "Host" : "Viewer"}
+                          </Badge>
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <button
-                            disabled={user.isHost}
-                            className={`transition-colors rounded p-1 flex justify-end w-full ${user.isHost ? "text-gray-300 dark:text-gray-700 cursor-not-allowed" : "text-[#6B7280] dark:text-[#A1A1AA] hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/10"}`}
-                          >
-                            {user.isHost ? (
-                              <MoreVertical size={18} />
-                            ) : (
-                              <Ban size={18} />
-                            )}
-                          </button>
+                          {isHost && !user.isHost && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                handleKick(user.id, user.displayName)
+                              }
+                              className="h-7 px-2 text-[#6B7280] hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/10"
+                            >
+                              <Ban size={16} />
+                            </Button>
+                          )}
                         </td>
                       </tr>
                     );
@@ -177,14 +201,20 @@ export function PeerPermissionsDialog({
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50/50 dark:bg-[#111111]/50 flex justify-end gap-3">
-          <button className="px-4 py-2 text-xs font-semibold text-[#6B7280] dark:text-[#A1A1AA] hover:text-[#111827] dark:hover:text-[#EDEDED] border border-transparent hover:bg-gray-100 dark:hover:bg-[#1C1C1C] rounded transition-colors">
-            Cancel
-          </button>
-          <button className="px-4 py-2 text-xs font-semibold text-white bg-[#111111] dark:bg-white dark:text-black rounded shadow-sm hover:opacity-90 transition-opacity">
-            Save Changes
-          </button>
-        </div>
+        {isHost && (
+          <div className="px-6 py-4 border-t border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50/50 dark:bg-[#111111]/50 flex justify-end gap-3">
+            <Button
+              variant="ghost"
+              onClick={() => setOpen(false)}
+              className="text-xs"
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleSave} className="text-xs">
+              Save Changes
+            </Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

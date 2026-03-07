@@ -1,6 +1,7 @@
 import type {
   User,
   RoomState,
+  RoomPermissions,
   WSClientMessage,
   WSServerMessage,
   CreateRoomResponse,
@@ -14,14 +15,18 @@ interface SessionAttachment {
   displayName: string;
   avatar?: string;
   isHost: boolean;
+  /** User's last reported local video timestamp */
+  videoTimestamp?: number;
 }
+
+// ─── Default permissions ───────────────────────────────────────────
+const DEFAULT_PERMISSIONS: RoomPermissions = {
+  viewersCanControl: true,
+  viewersCanChat: true,
+};
 
 // ─── Room Durable Object ───────────────────────────────────────────
 export class Room extends DurableObject<Env> {
-  /**
-   * In-memory session map rebuilt from hibernated sockets on wake.
-   * Key = WebSocket, Value = user metadata.
-   */
   private sessions: Map<WebSocket, SessionAttachment>;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -42,11 +47,23 @@ export class Room extends DurableObject<Env> {
     );
   }
 
+  // ─── RPC: Check if room exists ──────────────────────────────────
+  async exists(): Promise<boolean> {
+    const name = await this.ctx.storage.get<string>("name");
+    return name !== undefined;
+  }
+
   // ─── RPC: Create / initialize room metadata ─────────────────────
   async createRoom(
     name: string,
     password?: string,
   ): Promise<CreateRoomResponse> {
+    // Guard: don't overwrite an active room with connected users
+    const existingName = await this.ctx.storage.get<string>("name");
+    if (existingName && this.sessions.size > 0) {
+      return { roomId: this.ctx.id.toString(), name: existingName };
+    }
+
     const initialData: Record<string, any> = {
       name,
       paused: true,
@@ -57,9 +74,11 @@ export class Room extends DurableObject<Env> {
     if (password) {
       initialData.password = password;
     } else {
-      // Clear password if not provided (making it a public room)
       await this.ctx.storage.delete("password");
     }
+
+    // Set default permissions
+    initialData.permissions = DEFAULT_PERMISSIONS;
 
     await this.ctx.storage.put(initialData);
 
@@ -74,24 +93,30 @@ export class Room extends DurableObject<Env> {
 
   // ─── WebSocket upgrade via fetch() ──────────────────────────────
   async fetch(request: Request): Promise<Response> {
-    // Validate upgrade header
     const upgrade = request.headers.get("Upgrade");
     if (!upgrade || upgrade !== "websocket") {
       return new Response("Expected WebSocket upgrade", { status: 426 });
     }
 
+    // Reject if room doesn't exist
+    const roomExists = await this.exists();
+    if (!roomExists) {
+      return new Response(JSON.stringify({ error: "Room not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
 
-    // Accept as a hibernatable WebSocket
     this.ctx.acceptWebSocket(server);
 
-    // Generate session ID; full user info arrives via the "join" message
     const userId = crypto.randomUUID();
     const attachment: SessionAttachment = {
       userId,
       displayName: "Anonymous",
-      isHost: this.sessions.size === 0, // first joiner is host
+      isHost: this.sessions.size === 0,
     };
     server.serializeAttachment(attachment);
     this.sessions.set(server, attachment);
@@ -132,21 +157,31 @@ export class Room extends DurableObject<Env> {
         await this.handleLeave(ws, session);
         break;
       case "play":
-        await this.handlePlay(ws, session, parsed.currentTime);
+        await this.handlePlaybackAction(
+          ws,
+          session,
+          "play",
+          parsed.currentTime,
+        );
         break;
       case "pause":
-        await this.handlePause(ws, session, parsed.currentTime);
+        await this.handlePlaybackAction(
+          ws,
+          session,
+          "pause",
+          parsed.currentTime,
+        );
         break;
       case "seek":
-        await this.handleSeek(ws, session, parsed.currentTime);
+        await this.handlePlaybackAction(
+          ws,
+          session,
+          "seek",
+          parsed.currentTime,
+        );
         break;
       case "chat":
-        this.broadcast({
-          type: "chat",
-          message: parsed.message,
-          userId: session.userId,
-          displayName: session.displayName,
-        });
+        await this.handleChat(ws, session, parsed.message);
         break;
       case "sync-request": {
         const roomState = await this.buildRoomSnapshot();
@@ -160,6 +195,15 @@ export class Room extends DurableObject<Env> {
           rate: parsed.rate,
           userId: session.userId,
         });
+        break;
+      case "time-update":
+        this.handleTimeUpdate(ws, session, parsed.currentTime);
+        break;
+      case "kick":
+        await this.handleKick(ws, session, parsed.userId);
+        break;
+      case "update-permissions":
+        await this.handleUpdatePermissions(ws, session, parsed.permissions);
         break;
       default:
         this.send(ws, {
@@ -178,8 +222,13 @@ export class Room extends DurableObject<Env> {
     _wasClean: boolean,
   ): Promise<void> {
     const session = this.sessions.get(ws);
-    ws.close(code, reason);
     this.sessions.delete(ws);
+
+    try {
+      ws.close(code, reason);
+    } catch {
+      // Socket may already be closed
+    }
 
     if (session) {
       this.broadcast({ type: "user-left", userId: session.userId });
@@ -229,9 +278,13 @@ export class Room extends DurableObject<Env> {
     // Broadcast to everyone else
     this.broadcast({ type: "user-joined", user }, ws);
 
-    // Send current room state to the joining user
+    // Send current room state to the joining user, including their server-assigned ID
     const roomState = await this.buildRoomSnapshot();
-    this.send(ws, { type: "room-state", room: roomState });
+    this.send(ws, {
+      type: "room-state",
+      room: roomState,
+      yourUserId: session.userId,
+    });
   }
 
   private async handleLeave(
@@ -243,31 +296,151 @@ export class Room extends DurableObject<Env> {
     ws.close(1000, "User left");
   }
 
-  private async handlePlay(
+  /** Unified playback action handler with permission enforcement */
+  private async handlePlaybackAction(
     ws: WebSocket,
     session: SessionAttachment,
+    action: "play" | "pause" | "seek",
     currentTime: number,
   ): Promise<void> {
-    await this.ctx.storage.put({ paused: false, currentTime });
-    this.broadcast({ type: "play", currentTime, userId: session.userId }, ws);
+    // Check permissions: only enforce if viewersCanControl is explicitly false
+    if (!session.isHost) {
+      const permissions = await this.getPermissions();
+      if (!permissions.viewersCanControl) {
+        this.send(ws, {
+          type: "error",
+          code: "PERMISSION_DENIED",
+          message: "You don't have permission to control playback",
+        });
+        return;
+      }
+    }
+
+    switch (action) {
+      case "play":
+        await this.ctx.storage.put({ paused: false, currentTime });
+        this.broadcast(
+          { type: "play", currentTime, userId: session.userId },
+          ws,
+        );
+        break;
+      case "pause":
+        await this.ctx.storage.put({ paused: true, currentTime });
+        this.broadcast(
+          { type: "pause", currentTime, userId: session.userId },
+          ws,
+        );
+        break;
+      case "seek":
+        await this.ctx.storage.put("currentTime", currentTime);
+        this.broadcast(
+          { type: "seek", currentTime, userId: session.userId },
+          ws,
+        );
+        break;
+    }
   }
 
-  private async handlePause(
+  private async handleChat(
     ws: WebSocket,
     session: SessionAttachment,
-    currentTime: number,
+    message: string,
   ): Promise<void> {
-    await this.ctx.storage.put({ paused: true, currentTime });
-    this.broadcast({ type: "pause", currentTime, userId: session.userId }, ws);
+    if (!session.isHost) {
+      const permissions = await this.getPermissions();
+      if (!permissions.viewersCanChat) {
+        this.send(ws, {
+          type: "error",
+          code: "PERMISSION_DENIED",
+          message: "Chat is disabled by the host",
+        });
+        return;
+      }
+    }
+
+    this.broadcast({
+      type: "chat",
+      message,
+      userId: session.userId,
+      displayName: session.displayName,
+    });
   }
 
-  private async handleSeek(
+  private handleTimeUpdate(
     ws: WebSocket,
     session: SessionAttachment,
     currentTime: number,
+  ): void {
+    // Update session's video timestamp
+    session.videoTimestamp = currentTime;
+    ws.serializeAttachment(session);
+    this.sessions.set(ws, session);
+
+    // Broadcast to all other clients
+    this.broadcast(
+      {
+        type: "user-time-update",
+        userId: session.userId,
+        currentTime,
+      },
+      ws,
+    );
+  }
+
+  private async handleKick(
+    ws: WebSocket,
+    session: SessionAttachment,
+    targetUserId: string,
   ): Promise<void> {
-    await this.ctx.storage.put("currentTime", currentTime);
-    this.broadcast({ type: "seek", currentTime, userId: session.userId }, ws);
+    // Only host can kick
+    if (!session.isHost) {
+      this.send(ws, {
+        type: "error",
+        code: "PERMISSION_DENIED",
+        message: "Only the host can kick users",
+      });
+      return;
+    }
+
+    // Find and disconnect the target user
+    for (const [targetWs, targetSession] of this.sessions) {
+      if (targetSession.userId === targetUserId) {
+        this.send(targetWs, {
+          type: "kicked",
+          reason: "You have been kicked by the host",
+        });
+        targetWs.close(1000, "Kicked by host");
+        this.sessions.delete(targetWs);
+        this.broadcast({ type: "user-left", userId: targetUserId });
+        return;
+      }
+    }
+  }
+
+  private async handleUpdatePermissions(
+    ws: WebSocket,
+    session: SessionAttachment,
+    newPerms: Partial<RoomPermissions>,
+  ): Promise<void> {
+    if (!session.isHost) {
+      this.send(ws, {
+        type: "error",
+        code: "PERMISSION_DENIED",
+        message: "Only the host can update permissions",
+      });
+      return;
+    }
+
+    const current = await this.getPermissions();
+    const merged: RoomPermissions = { ...current, ...newPerms };
+    await this.ctx.storage.put("permissions", merged);
+
+    this.broadcast({ type: "permissions-updated", permissions: merged });
+  }
+
+  private async getPermissions(): Promise<RoomPermissions> {
+    const stored = await this.ctx.storage.get<RoomPermissions>("permissions");
+    return stored ?? DEFAULT_PERMISSIONS;
   }
 
   /** Send a typed message to a single WebSocket */
@@ -294,12 +467,14 @@ export class Room extends DurableObject<Env> {
 
   /** Build a Room snapshot from storage + active sessions */
   private async buildRoomSnapshot(): Promise<RoomState> {
-    const [name, paused, currentTime, playbackRate] = await Promise.all([
-      this.ctx.storage.get<string>("name"),
-      this.ctx.storage.get<boolean>("paused"),
-      this.ctx.storage.get<number>("currentTime"),
-      this.ctx.storage.get<number>("playbackRate"),
-    ]);
+    const [name, paused, currentTime, playbackRate, permissions] =
+      await Promise.all([
+        this.ctx.storage.get<string>("name"),
+        this.ctx.storage.get<boolean>("paused"),
+        this.ctx.storage.get<number>("currentTime"),
+        this.ctx.storage.get<number>("playbackRate"),
+        this.getPermissions(),
+      ]);
 
     const users: User[] = [];
     for (const [, session] of this.sessions) {
@@ -313,6 +488,7 @@ export class Room extends DurableObject<Env> {
       currentTime: currentTime ?? 0,
       paused: paused ?? true,
       playbackRate: playbackRate ?? 1,
+      permissions,
     };
   }
 
@@ -323,6 +499,8 @@ export class Room extends DurableObject<Env> {
       displayName: session.displayName,
       avatar: session.avatar,
       isHost: session.isHost,
+      connectionStatus: "online",
+      videoTimestamp: session.videoTimestamp,
     };
   }
 }
