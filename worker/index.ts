@@ -90,6 +90,9 @@ async function handleRoomApi(
   if (match && request.method === "GET") {
     const roomId = match[1];
     const stub = env.ROOM.get(env.ROOM.idFromName(roomId));
+    if (!stub) {
+      return jsonResponse<ApiErrorResponse>({ error: "Room not found" }, 404);
+    }
     const result = await stub.getRoomState();
     return jsonResponse(result, 200);
   }

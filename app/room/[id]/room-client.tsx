@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { RoomProvider, useRoom } from "@/lib/room-context";
 import { LobbyScreen } from "@/components/lobby-screen";
 import { PlayerDashboard } from "@/components/player-dashboard";
@@ -19,6 +19,7 @@ function RoomController({ roomId }: { roomId: string }) {
   const { isConnected, connect, roomState, error } = useRoom();
   const [hasJoined, setHasJoined] = useState(false);
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   // Auto-join if query params are present (coming from Create or Join tab)
   useEffect(() => {
@@ -47,6 +48,7 @@ function RoomController({ roomId }: { roomId: string }) {
           <button
             onClick={() => {
               setHasJoined(false);
+              router.refresh();
             }}
             className="px-6 py-2.5 bg-[#111] dark:bg-white text-white dark:text-black text-sm font-semibold rounded-lg hover:opacity-90 transition-opacity"
           >
