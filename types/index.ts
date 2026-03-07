@@ -95,6 +95,11 @@ export interface CreateRoomResponse {
   name: string;
 }
 
+export interface CreateRoomConflictResponse {
+  error: "ROOM_EXISTS";
+  message: string;
+}
+
 export interface RoomStateResponse {
   room: RoomState;
 }

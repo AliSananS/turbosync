@@ -59,11 +59,13 @@ export class Room extends DurableObject<Env> {
     name: string,
     password?: string,
     hostPeerId?: string,
-  ): Promise<CreateRoomResponse> {
-    // Guard: don't overwrite an active room with connected users
+  ): Promise<CreateRoomResponse | { conflict: true }> {
     const existingName = await this.ctx.storage.get<string>("name");
-    if (existingName && this.sessions.size > 0) {
-      return { roomId: this.ctx.id.toString(), name: existingName };
+    const existingHostPeerId = await this.ctx.storage.get<string>("hostPeerId");
+
+    // If the room is already claimed (has a stored hostPeerId), reject it
+    if (existingName && existingHostPeerId) {
+      return { conflict: true };
     }
 
     const initialData: Record<string, any> = {

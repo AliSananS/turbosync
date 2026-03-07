@@ -45,6 +45,7 @@ export default function Home() {
     e.preventDefault();
     if (!roomName.trim() || !createDisplayName.trim()) return;
 
+    setLoading(true);
     try {
       // Save displayName for next time
       localStorage.setItem("turbosync_name", createDisplayName.trim());
@@ -65,6 +66,14 @@ export default function Home() {
           hostPeerId,
         }),
       });
+
+      if (res.status === 409) {
+        const data = (await res.json()) as { error: string };
+        toast.error("Room name already taken", {
+          description: data.error,
+        });
+        return;
+      }
 
       if (!res.ok) throw new Error("Failed to create room");
 

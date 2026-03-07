@@ -90,6 +90,17 @@ async function handleRoomApi(
       body.password,
       body.hostPeerId,
     );
+
+    // Room name is already taken by another host
+    if ("conflict" in result && result.conflict) {
+      return jsonResponse<ApiErrorResponse>(
+        {
+          error: `A room named "${body.name}" already exists. Choose a different name.`,
+        },
+        409,
+      );
+    }
+
     return jsonResponse({ ...result, slug }, 200);
   }
 
