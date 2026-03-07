@@ -217,13 +217,11 @@ function ActiveMembersTable({
                       {/* Timeline Sync */}
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2">
-                          {user.isHost ? (
-                            <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-600 dark:text-amber-500 bg-amber-500/10 px-2 py-1 rounded-md">
-                              <Crown size={12} />
-                              Master Timeline
-                            </div>
-                          ) : isOnline ? (
+                          {isOnline ? (
                             <div className="flex items-center gap-2">
+                              {user.isHost && (
+                                <Crown size={12} className="text-amber-500" />
+                              )}
                               <div className="font-mono text-xs text-[#111111] dark:text-[#EDEDED] bg-gray-100 dark:bg-[#111111] px-2 py-1 rounded-md">
                                 {formatTimestamp(displayTime || 0)}
                               </div>
@@ -384,6 +382,7 @@ export function PlayerDashboard() {
   }, [reportTimeUpdate]);
 
   const activeUsers = roomState?.users || [];
+  const hasVideo = localProgress.duration > 0;
 
   // Callbacks from LocalVideoPlayer → broadcast to room
   const onVideoPlay = useCallback(
@@ -438,6 +437,7 @@ export function PlayerDashboard() {
         <section className="w-full">
           <LocalVideoPlayer
             ref={playerRef}
+            roomId={roomState?.id || ""}
             onPlay={onVideoPlay}
             onPause={onVideoPause}
             onSeek={onVideoSeek}
@@ -451,7 +451,9 @@ export function PlayerDashboard() {
           />
 
           {/* Custom Control Bar (below video) */}
-          <div className="mt-3 bg-[#FFFFFF] dark:bg-[#0A0A0A] border border-[#E5E7EB] dark:border-[#1F1F23] rounded-xl p-4 shadow-sm">
+          <div
+            className={`mt-3 bg-[#FFFFFF] dark:bg-[#0A0A0A] border border-[#E5E7EB] dark:border-[#1F1F23] rounded-xl p-4 shadow-sm transition-opacity duration-300 ${!hasVideo ? "opacity-50 pointer-events-none" : ""}`}
+          >
             {/* Seek bar with hover tooltip */}
             <div
               ref={seekBarRef}

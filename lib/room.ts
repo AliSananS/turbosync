@@ -299,7 +299,25 @@ export class Room extends DurableObject<Env> {
       isHost = false;
     }
 
+    // Generate userId from slugified displayName
+    const slugId = msg.user.displayName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+    const newUserId = slugId || session.userId; // fallback to generated UUID if name is empty
+
+    // Deduplicate: If another session has the same userId, disconnect it
+    for (const [existingWs, existingSession] of this.sessions.entries()) {
+      if (existingSession.userId === newUserId && existingWs !== ws) {
+        this.sessions.delete(existingWs);
+        try {
+          existingWs.close(1008, "Joined from another device");
+        } catch {}
+      }
+    }
+
     // Update session with real user info
+    session.userId = newUserId;
     session.displayName = msg.user.displayName;
     session.peerId = msg.user.peerId;
     session.avatar = msg.user.avatar;

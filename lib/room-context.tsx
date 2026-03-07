@@ -14,6 +14,7 @@ import type {
   WSClientMessage,
   WSServerMessage,
 } from "@/types";
+import { toast } from "sonner";
 
 interface RoomContextType {
   roomState: RoomState | null;
@@ -26,7 +27,7 @@ interface RoomContextType {
     user: Omit<User, "id"> & { peerId?: string },
     password?: string,
   ) => void;
-  disconnect: () => void;
+  disconnect: (clearParams?: boolean) => void;
   play: (currentTime: number) => void;
   pause: (currentTime: number) => void;
   seek: (currentTime: number) => void;
@@ -89,13 +90,11 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     if (clearParams) {
       connectionParamsRef.current = null;
       reconnectAttemptsRef.current = 0;
+      setRoomState(null);
+      setCurrentUser(null);
+      setError(null);
     }
     setIsConnected(false);
-    setRoomState(null);
-    setCurrentUser(null);
-    // Don't clear error if we're disconnecting due to an error,
-    // but clear it if it's a fresh start
-    if (clearParams) setError(null);
   }, []);
 
   const connect = useCallback(
@@ -197,6 +196,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
               break;
 
             case "user-joined":
+              toast.success(`${msg.user.displayName} joined the room`);
               setRoomState((prev) =>
                 prev
                   ? {
@@ -211,18 +211,21 @@ export function RoomProvider({ children }: { children: ReactNode }) {
               break;
 
             case "user-left":
-              setRoomState((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      users: prev.users.map((u) =>
-                        u.id === msg.userId
-                          ? { ...u, connectionStatus: "away" as const }
-                          : u,
-                      ),
-                    }
-                  : null,
-              );
+              setRoomState((prev) => {
+                if (!prev) return null;
+                const user = prev.users.find((u) => u.id === msg.userId);
+                if (user && user.connectionStatus !== "away") {
+                  toast.info(`${user.displayName} disconnected`);
+                }
+                return {
+                  ...prev,
+                  users: prev.users.map((u) =>
+                    u.id === msg.userId
+                      ? { ...u, connectionStatus: "away" as const }
+                      : u,
+                  ),
+                };
+              });
               break;
 
             case "play":
