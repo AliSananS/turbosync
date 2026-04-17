@@ -573,7 +573,7 @@ export const VideoPlayer = React.forwardRef<
           }}
         >
           {children}
-          <source src={src} type="video/mp4" />
+          <source src={src} />
           {subTitlesFile && (
             <track
               kind="captions"

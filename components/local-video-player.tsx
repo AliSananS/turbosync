@@ -10,7 +10,7 @@ import React, {
 } from "react";
 import { VideoPlayer, VideoPlayerHandle } from "@/components/video-player";
 import { useRoom } from "@/lib/room-context";
-import { Upload, Film, Subtitles } from "lucide-react";
+import { Upload, Film, Subtitles, Link, HardDrive } from "lucide-react";
 import { toast } from "sonner";
 
 /* ------------------------------------------------------------------ */
@@ -111,6 +111,11 @@ export const LocalVideoPlayer = forwardRef<
     const [isDraggingOver, setIsDraggingOver] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
+    const [sourceMode, setSourceMode] = useState<"file" | "url">("file");
+    const [videoUrlInput, setVideoUrlInput] = useState("");
+    const [subtitleUrlInput, setSubtitleUrlInput] = useState("");
+    const [isLoadingUrl, setIsLoadingUrl] = useState(false);
+
     const videoInputRef = useRef<HTMLInputElement>(null);
     const subtitleInputRef = useRef<HTMLInputElement>(null);
 
@@ -166,6 +171,59 @@ export const LocalVideoPlayer = forwardRef<
       setSubtitleSrc(URL.createObjectURL(file));
       toast.success("Subtitles loaded", { description: file.name });
     }, []);
+
+    /* ---- URL handling --------------------------------------------- */
+
+    const isValidUrl = useCallback((urlStr: string): boolean => {
+      try {
+        const u = new URL(urlStr);
+        return u.protocol === "http:" || u.protocol === "https:";
+      } catch {
+        return false;
+      }
+    }, []);
+
+    const handleVideoUrl = useCallback(() => {
+      const url = videoUrlInput.trim();
+      if (!url) {
+        toast.error("No URL", { description: "Please enter a video URL." });
+        return;
+      }
+      if (!isValidUrl(url)) {
+        toast.error("Invalid URL", {
+          description: "Enter a valid http:// or https:// URL.",
+        });
+        return;
+      }
+      setIsLoadingUrl(true);
+      setVideoSrc(url);
+      toast.success("Video URL set", {
+        description: url.length > 60 ? `${url.slice(0, 60)}...` : url,
+      });
+      setIsLoadingUrl(false);
+    }, [videoUrlInput, isValidUrl]);
+
+    const handleSubtitleUrl = useCallback(() => {
+      const url = subtitleUrlInput.trim();
+      if (!url) {
+        toast.error("No URL", {
+          description: "Please enter a subtitle URL.",
+        });
+        return;
+      }
+      if (!isValidUrl(url)) {
+        toast.error("Invalid URL", {
+          description: "Enter a valid http:// or https:// URL.",
+        });
+        return;
+      }
+      // Proxy subtitle through our worker to avoid CORS issues
+      const proxiedUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
+      setSubtitleSrc(proxiedUrl);
+      toast.success("Subtitle URL set", {
+        description: url.length > 60 ? `${url.slice(0, 60)}...` : url,
+      });
+    }, [subtitleUrlInput, isValidUrl]);
 
     /* ---- Drag & Drop --------------------------------------------- */
 
@@ -234,7 +292,7 @@ export const LocalVideoPlayer = forwardRef<
 
     const resLabel = resolution ? `${resolution.w}×${resolution.h}` : null;
 
-    /* ---- Render: no video loaded → drop zone --------------------- */
+    /* ---- Render: no video loaded → source picker ------------------- */
 
     if (!videoSrc) {
       return (
@@ -244,72 +302,199 @@ export const LocalVideoPlayer = forwardRef<
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
-          <div
-            className={`
-            relative w-full aspect-video rounded-xl border-2 border-dashed
-            flex flex-col items-center justify-center gap-4
-            transition-all duration-300 cursor-pointer
-            ${
-              isDraggingOver
-                ? "border-blue-500 bg-blue-500/10 scale-[1.01] shadow-lg shadow-blue-500/20"
-                : "border-[#E5E7EB] dark:border-[#1F1F23] bg-[#FAFAFA] dark:bg-[#0A0A0A] hover:border-[#999] dark:hover:border-[#444]"
-            }
-          `}
-            onClick={() => videoInputRef.current?.click()}
-          >
-            {/* Animated upload icon */}
-            <div
-              className={`
-              p-4 rounded-2xl transition-all duration-300
-              ${isDraggingOver ? "bg-blue-500/20 scale-110" : "bg-[#F3F4F6] dark:bg-[#111111]"}
-            `}
-            >
-              <Upload
-                size={32}
-                className={`transition-colors duration-300 ${
-                  isDraggingOver
-                    ? "text-blue-500"
-                    : "text-[#6B7280] dark:text-[#A1A1AA]"
-                }`}
-              />
-            </div>
-
-            <div className="text-center">
-              <p
-                className={`text-sm font-semibold transition-colors ${
-                  isDraggingOver
-                    ? "text-blue-600 dark:text-blue-400"
-                    : "text-[#111827] dark:text-[#EDEDED]"
-                }`}
-              >
-                {isDraggingOver
-                  ? "Drop your file here"
-                  : "Drag & drop a video file"}
-              </p>
-              <p className="text-xs text-[#6B7280] dark:text-[#A1A1AA] mt-1">
-                or click to browse · MP4, WebM, MKV
-              </p>
-            </div>
-
-            {/* Subtitle upload button */}
+          {/* Source mode tabs */}
+          <div className="flex items-center gap-1 mb-3 p-1 rounded-lg bg-[#F3F4F6] dark:bg-[#111111] w-fit">
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                subtitleInputRef.current?.click();
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-[#6B7280] dark:text-[#A1A1AA] hover:text-[#111827] dark:hover:text-[#EDEDED] border border-[#E5E7EB] dark:border-[#1F1F23] rounded-lg hover:bg-[#F3F4F6] dark:hover:bg-[#111111] transition-colors"
+              onClick={() => setSourceMode("file")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                sourceMode === "file"
+                  ? "bg-white dark:bg-[#1A1A1A] text-[#111827] dark:text-[#EDEDED] shadow-sm"
+                  : "text-[#6B7280] dark:text-[#A1A1AA] hover:text-[#111827] dark:hover:text-[#EDEDED]"
+              }`}
             >
-              <Subtitles size={14} />
-              Add subtitles (.vtt)
+              <HardDrive size={13} />
+              Local File
             </button>
-
-            {subtitleSrc && (
-              <span className="text-[10px] text-green-600 dark:text-green-400 font-medium">
-                ✓ Subtitles loaded
-              </span>
-            )}
+            <button
+              type="button"
+              onClick={() => setSourceMode("url")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                sourceMode === "url"
+                  ? "bg-white dark:bg-[#1A1A1A] text-[#111827] dark:text-[#EDEDED] shadow-sm"
+                  : "text-[#6B7280] dark:text-[#A1A1AA] hover:text-[#111827] dark:hover:text-[#EDEDED]"
+              }`}
+            >
+              <Link size={13} />
+              Direct URL
+            </button>
           </div>
+
+          {sourceMode === "file" ? (
+            /* ---- File mode: drag & drop zone ---- */
+            <button
+              type="button"
+              onClick={() => videoInputRef.current?.click()}
+              className={`
+                relative w-full aspect-video rounded-xl border-2 border-dashed
+                flex flex-col items-center justify-center gap-4
+                transition-all duration-300 cursor-pointer text-left
+                ${
+                  isDraggingOver
+                    ? "border-blue-500 bg-blue-500/10 scale-[1.01] shadow-lg shadow-blue-500/20"
+                    : "border-[#E5E7EB] dark:border-[#1F1F23] bg-[#FAFAFA] dark:bg-[#0A0A0A] hover:border-[#999] dark:hover:border-[#444]"
+                }
+              `}
+            >
+              {/* Animated upload icon */}
+              <div
+                className={`
+                  p-4 rounded-2xl transition-all duration-300
+                  ${isDraggingOver ? "bg-blue-500/20 scale-110" : "bg-[#F3F4F6] dark:bg-[#111111]"}
+                `}
+              >
+                <Upload
+                  size={32}
+                  className={`transition-colors duration-300 ${
+                    isDraggingOver
+                      ? "text-blue-500"
+                      : "text-[#6B7280] dark:text-[#A1A1AA]"
+                  }`}
+                />
+              </div>
+
+              <div className="text-center">
+                <p
+                  className={`text-sm font-semibold transition-colors ${
+                    isDraggingOver
+                      ? "text-blue-600 dark:text-blue-400"
+                      : "text-[#111827] dark:text-[#EDEDED]"
+                  }`}
+                >
+                  {isDraggingOver
+                    ? "Drop your file here"
+                    : "Drag & drop a video file"}
+                </p>
+                <p className="text-xs text-[#6B7280] dark:text-[#A1A1AA] mt-1">
+                  or click to browse · MP4, WebM, MKV
+                </p>
+              </div>
+
+              {/* Subtitle upload button */}
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  subtitleInputRef.current?.click();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    subtitleInputRef.current?.click();
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-[#6B7280] dark:text-[#A1A1AA] hover:text-[#111827] dark:hover:text-[#EDEDED] border border-[#E5E7EB] dark:border-[#1F1F23] rounded-lg hover:bg-[#F3F4F6] dark:hover:bg-[#111111] transition-colors"
+              >
+                <Subtitles size={14} />
+                Add subtitles (.vtt)
+              </span>
+
+              {subtitleSrc && (
+                <span className="text-[10px] text-green-600 dark:text-green-400 font-medium">
+                  Subtitles loaded
+                </span>
+              )}
+            </button>
+          ) : (
+            /* ---- URL mode: text inputs ---- */
+            <div
+              className={`
+                relative w-full aspect-video rounded-xl border-2
+                flex flex-col items-center justify-center gap-5 px-6
+                transition-all duration-300
+                border-[#E5E7EB] dark:border-[#1F1F23] bg-[#FAFAFA] dark:bg-[#0A0A0A]
+              `}
+            >
+              <div className="p-3 rounded-2xl bg-[#F3F4F6] dark:bg-[#111111]">
+                <Link
+                  size={28}
+                  className="text-[#6B7280] dark:text-[#A1A1AA]"
+                />
+              </div>
+
+              {/* Video URL input */}
+              <div className="w-full max-w-md flex flex-col gap-1.5">
+                <label
+                  htmlFor="video-url-input"
+                  className="text-[11px] font-medium text-[#6B7280] dark:text-[#A1A1AA]"
+                >
+                  Video URL
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="video-url-input"
+                    type="url"
+                    value={videoUrlInput}
+                    onChange={(e) => setVideoUrlInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleVideoUrl();
+                    }}
+                    placeholder="https://example.com/video.mp4"
+                    className="flex-1 px-3 py-2 text-sm rounded-lg border border-[#E5E7EB] dark:border-[#1F1F23] bg-white dark:bg-[#0A0A0A] text-[#111827] dark:text-[#EDEDED] placeholder:text-[#9CA3AF] dark:placeholder:text-[#52525B] focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleVideoUrl}
+                    disabled={isLoadingUrl || !videoUrlInput.trim()}
+                    className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isLoadingUrl ? "Loading..." : "Load"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Subtitle URL input */}
+              <div className="w-full max-w-md flex flex-col gap-1.5">
+                <label
+                  htmlFor="subtitle-url-input"
+                  className="text-[11px] font-medium text-[#6B7280] dark:text-[#A1A1AA]"
+                >
+                  Subtitle URL
+                  <span className="ml-1 font-normal text-[#9CA3AF] dark:text-[#52525B]">
+                    (optional · .vtt or .srt)
+                  </span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="subtitle-url-input"
+                    type="url"
+                    value={subtitleUrlInput}
+                    onChange={(e) => setSubtitleUrlInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleSubtitleUrl();
+                    }}
+                    placeholder="https://example.com/captions.vtt"
+                    className="flex-1 px-3 py-2 text-sm rounded-lg border border-[#E5E7EB] dark:border-[#1F1F23] bg-white dark:bg-[#0A0A0A] text-[#111827] dark:text-[#EDEDED] placeholder:text-[#9CA3AF] dark:placeholder:text-[#52525B] focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSubtitleUrl}
+                    disabled={!subtitleUrlInput.trim()}
+                    className="px-4 py-2 text-sm font-medium rounded-lg border border-[#E5E7EB] dark:border-[#1F1F23] text-[#6B7280] dark:text-[#A1A1AA] hover:bg-[#F3F4F6] dark:hover:bg-[#111111] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Load
+                  </button>
+                </div>
+              </div>
+
+              <p className="text-[10px] text-[#9CA3AF] dark:text-[#52525B] text-center max-w-sm">
+                Paste a direct link to a video file. The URL must point to a
+                playable media file (MP4, WebM, etc).
+              </p>
+            </div>
+          )}
 
           {/* Hidden file inputs */}
           <input
@@ -389,6 +574,19 @@ export const LocalVideoPlayer = forwardRef<
           >
             <Film size={14} />
             Change Video
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setVideoSrc(null);
+              setSubtitleSrc(null);
+              setResolution(null);
+              setSourceMode("url");
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-[#6B7280] dark:text-[#A1A1AA] hover:text-[#111827] dark:hover:text-[#EDEDED] border border-[#E5E7EB] dark:border-[#1F1F23] rounded-lg hover:bg-[#F3F4F6] dark:hover:bg-[#111111] transition-colors"
+          >
+            <Link size={14} />
+            Load URL
           </button>
           <button
             type="button"
