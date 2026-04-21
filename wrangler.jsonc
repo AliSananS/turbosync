@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "turbosync",
+  "account_id": "82d31e3b94e52fcabd313be51bf953d5",
   "compatibility_date": "2026-02-12",
   "compatibility_flags": ["nodejs_compat"],
   "main": "worker/index.ts",
