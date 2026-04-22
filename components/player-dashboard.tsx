@@ -305,13 +305,36 @@ function DashboardHeader({
   toggleDark,
   latency,
   isConnected,
+  reconnectState,
+  onRetry,
 }: {
   roomName: string;
   isDark: boolean;
   toggleDark: () => void;
   latency: number;
   isConnected: boolean;
+  reconnectState?: {
+    attempts: number;
+    isReconnecting: boolean;
+    nextRetryIn: number;
+  };
+  onRetry?: () => void;
 }) {
+  const getStatusInfo = () => {
+    if (!isConnected || reconnectState?.isReconnecting) {
+      const text = reconnectState?.isReconnecting
+        ? `${Math.ceil((reconnectState.nextRetryIn || 0) / 1000)}s`
+        : "offline";
+      const color = "text-red-500";
+      return { text, color };
+    }
+    if (latency < 100) return { text: `${latency}ms`, color: "text-green-500" };
+    if (latency < 300) return { text: `${latency}ms`, color: "text-amber-500" };
+    return { text: `${latency}ms`, color: "text-red-500" };
+  };
+
+  const status = getStatusInfo();
+
   return (
     <header className="w-full h-14 flex items-center justify-between px-4 md:px-6 border-b border-[#E5E7EB] dark:border-[#1F1F23] bg-[#FFFFFF] dark:bg-[#0A0A0A] transition-colors duration-200 sticky top-0 z-50">
       <div className="flex items-center gap-2 md:gap-3">
@@ -327,12 +350,21 @@ function DashboardHeader({
       <div className="flex items-center gap-2 md:gap-4">
         <div className="flex items-center gap-1.5 md:gap-2 text-[10px] md:text-[11px] font-semibold text-[#6B7280] dark:text-[#A1A1AA] uppercase tracking-wider">
           <span
-            className={`w-1.5 h-1.5 rounded-full ${isConnected ? (latency < 200 ? "bg-green-500" : "bg-amber-500") : "bg-red-500"} animate-pulse`}
+            className={`w-1.5 h-1.5 rounded-full ${isConnected && !reconnectState?.isReconnecting ? (latency < 200 ? "bg-green-500" : "bg-amber-500") : "bg-red-500"} animate-pulse`}
           ></span>
-          <span className="font-mono">
-            {isConnected ? `${latency}ms` : "reconnecting..."}
+          <span className={`font-mono ${status.color}`}>
+            {status.text}
           </span>
         </div>
+        {(!isConnected || reconnectState?.isReconnecting) && onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="px-2 py-0.5 text-[10px] font-medium rounded bg-[#111] dark:bg-white text-white dark:text-black hover:opacity-80 transition-opacity"
+          >
+            Retry
+          </button>
+        )}
         <div className="h-4 w-px bg-[#E5E7EB] dark:bg-[#1F1F23] mx-0.5 md:mx-1"></div>
 
         <button
@@ -360,6 +392,8 @@ export function PlayerDashboard() {
     pause,
     seek,
     reportTimeUpdate,
+    reconnectState,
+    forceReconnect,
   } = useRoom();
   const [isDark, setIsDark] = useState(true);
   const playerRef = useRef<LocalVideoPlayerHandle>(null);
@@ -473,6 +507,8 @@ export function PlayerDashboard() {
         toggleDark={() => setIsDark(!isDark)}
         latency={latency}
         isConnected={isConnected}
+        reconnectState={reconnectState}
+        onRetry={forceReconnect}
       />
 
       <main className="flex-1 w-full max-w-350 mx-auto p-4 md:p-6 space-y-6">

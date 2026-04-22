@@ -294,12 +294,13 @@ export function RoomProvider({ children }: { children: ReactNode }) {
         lastPongReceivedAtRef.current = performance.now();
         pingIntervalRef.current = setInterval(() => {
           const now = performance.now();
+          // Only send ping if connection is still open (readyState === 1)
+          if (ws.readyState !== 1) return;
+
           // If we haven't received a pong in over 10s, assume connection is dead
           if (now - lastPongReceivedAtRef.current > 10000) {
             console.warn("Pong timeout, force closing for reconnection...");
-            if (wsRef.current) {
-              wsRef.current.close(); // Triggers onclose and auto-reconnect
-            }
+            ws.close(); // Triggers onclose and auto-reconnect
             return;
           }
           pingStartRef.current = now;

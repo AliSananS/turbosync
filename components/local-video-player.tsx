@@ -395,20 +395,20 @@ export const LocalVideoPlayer = forwardRef<
 
     /* ---- Video sharing -------------------------------------------- */
 
-    const handleShareVideo = useCallback(() => {
-      if (!videoSrc || videoSrc.startsWith("blob:")) {
-        toast.error("Cannot share", {
-          description: "Only URL-based videos can be shared with the room.",
-        });
-        return;
-      }
+     const handleShareVideo = useCallback(() => {
+       if (!videoSrc || videoSrc.startsWith("blob:")) {
+         toast.error("Cannot share", {
+           description: "Only URL-based videos can be shared with the room.",
+         });
+         return;
+       }
 
-      setVideoUrl(videoSrc);
-      setShowSharePrompt(false);
-      toast.success("Video shared", {
-        description: "The video URL has been shared with everyone in the room.",
-      });
-    }, [videoSrc, setVideoUrl]);
+       setVideoUrl(videoSrc);
+       setShowSharePrompt(false);
+       toast.success("Video shared with room", {
+         description: "Everyone in the room will now see and can load this video.",
+       });
+     }, [videoSrc, setVideoUrl]);
 
     const handleLoadSharedVideo = useCallback(
       (url: string) => {
@@ -486,18 +486,33 @@ export const LocalVideoPlayer = forwardRef<
       }
     }, [pendingVideoUrl, videoSrc, handleLoadSharedVideo]);
 
-    /* ---- Check for room's shared video on join ------------------- */
+    /* ---- Auto-load room's shared video when available ------------ */
+
+    // Track the last loaded shared video URL to avoid reloading
+    const lastLoadedSharedRef = useRef<string | null>(null);
 
     useEffect(() => {
-      if (
-        roomState?.videoUrl &&
-        roomState.videoUrl !== videoSrc &&
-        !videoSrc?.startsWith("blob:")
-      ) {
-        // Room has a shared video that we haven't loaded yet
-        setShowSharePrompt(true);
+      const sharedUrl = roomState?.videoUrl;
+      // Skip if no shared URL, or it's the same as already loaded, or we have a local file
+      if (!sharedUrl || sharedUrl === videoSrc || videoSrc?.startsWith("blob:")) {
+        return;
       }
-    }, [roomState?.videoUrl, videoSrc]);
+
+      // Skip if we've already handled this specific URL
+      if (lastLoadedSharedRef.current === sharedUrl) {
+        return;
+      }
+
+      // Mark this URL as handled
+      lastLoadedSharedRef.current = sharedUrl;
+
+      // Auto-load the shared video
+      toast.info("Loading shared video...", {
+        description: getVideoFileName(sharedUrl),
+        duration: 3000,
+      });
+      handleVideoUrl(sharedUrl, true);
+    }, [roomState?.videoUrl, videoSrc, handleVideoUrl]);
 
     /* ---- Metadata loaded: sync with room state ------------------- */
 
@@ -761,18 +776,21 @@ export const LocalVideoPlayer = forwardRef<
                       <AlertCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />
                     )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleVideoUrl()}
-                    disabled={
-                      isLoadingUrl ||
-                      !videoUrlInput.trim() ||
-                      urlValidation.status === "invalid"
-                    }
-                    className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {isLoadingUrl ? "Loading..." : "Load"}
-                  </button>
+                   <button
+                     type="button"
+                     onClick={() => {
+                       handleVideoUrl();
+                       // Load only for current user (doesn't share with room)
+                     }}
+                     disabled={
+                       isLoadingUrl ||
+                       !videoUrlInput.trim() ||
+                       urlValidation.status === "invalid"
+                     }
+                     className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                   >
+                     {isLoadingUrl ? "Loading..." : "Load for Me"}
+                   </button>
                 </div>
                 {urlValidation.message && (
                   <p
@@ -966,16 +984,22 @@ export const LocalVideoPlayer = forwardRef<
               </span>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
-              {!videoSrc.startsWith("blob:") && (
-                <button
-                  type="button"
-                  onClick={handleShareVideo}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-                >
-                  <Share2 size={12} />
-                  Share with Room
-                </button>
-              )}
+               {!videoSrc.startsWith("blob:") && (
+                 <button
+                   type="button"
+                   onClick={() => {
+                     handleShareVideo();
+                     // Also load the video locally when sharing with room
+                     if (videoSrc) {
+                       handleVideoUrl(videoSrc);
+                     }
+                   }}
+                   className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                 >
+                   <Share2 size={12} />
+                   Load for Everyone
+                 </button>
+               )}
               {videoSrc.startsWith("blob:") ? (
                 <button
                   type="button"

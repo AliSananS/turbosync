@@ -6,7 +6,7 @@ import { RoomProvider, useRoom } from "@/lib/room-context";
 import { LobbyScreen } from "@/components/lobby-screen";
 import { PlayerDashboard } from "@/components/player-dashboard";
 import { toast } from "sonner";
-import { WifiOff, Loader2, Wifi, RefreshCw } from "lucide-react";
+import { WifiOff, Wifi } from "lucide-react";
 
 export function RoomClient({ roomId }: { roomId: string }) {
   return (
@@ -16,87 +16,63 @@ export function RoomClient({ roomId }: { roomId: string }) {
   );
 }
 
-// Reconnection overlay component
-function ReconnectionOverlay({
+// Connection status indicator - shows in header area
+function ConnectionStatus({
+  isConnected,
+  latency,
   reconnectState,
-  error,
   onRetry,
 }: {
+  isConnected: boolean;
+  latency: number;
   reconnectState: {
     attempts: number;
     isReconnecting: boolean;
     nextRetryIn: number;
   };
-  error: string | null;
   onRetry: () => void;
 }) {
-  if (!reconnectState.isReconnecting) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-white dark:bg-[#0A0A0A] rounded-2xl border border-[#EAEAEA] dark:border-[#1F1F23] p-8 shadow-2xl max-w-md w-full mx-4">
-        <div className="flex flex-col items-center text-center">
-          <div className="w-16 h-16 rounded-full bg-yellow-100 dark:bg-yellow-900/20 flex items-center justify-center mb-4">
-            <WifiOff className="w-8 h-8 text-yellow-600 dark:text-yellow-400" />
-          </div>
-
-          <h3 className="text-xl font-bold text-[#111] dark:text-[#EDEDED] mb-2">
-            Connection Lost
-          </h3>
-
-          <p className="text-sm text-[#666] dark:text-[#A1A1AA] mb-4">
-            {error || "We've lost connection to the room server."}
-          </p>
-
-          <div className="flex items-center gap-2 text-sm text-[#666] dark:text-[#A1A1AA] mb-6">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>
-              Retrying in{" "}
-              <span className="font-semibold text-[#111] dark:text-white">
-                {Math.ceil(reconnectState.nextRetryIn / 1000)}
-              </span>{" "}
-              seconds...
-            </span>
-          </div>
-
-          <div className="text-xs text-[#999] dark:text-[#666] mb-6">
-            Attempt {reconnectState.attempts} • Exponential backoff with jitter
-          </div>
-
-          <button
-            type="button"
-            onClick={onRetry}
-            className="px-6 py-2.5 bg-[#111] dark:bg-white text-white dark:text-black text-sm font-semibold rounded-lg hover:opacity-90 transition-opacity flex items-center gap-2"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Retry Now
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Connection status indicator
-function ConnectionStatus({
-  isConnected,
-  latency,
-}: {
-  isConnected: boolean;
-  latency: number;
-}) {
-  if (!isConnected) return null;
-
   const getColor = () => {
+    if (!isConnected) return "text-red-500";
     if (latency < 100) return "text-green-500";
     if (latency < 300) return "text-yellow-500";
     return "text-red-500";
   };
 
+  const getIcon = () => {
+    if (!isConnected || reconnectState.isReconnecting) {
+      return reconnectState.isReconnecting ? (
+        <Loader2 className="w-4 h-4 animate-spin" />
+      ) : (
+        <WifiOff className="w-4 h-4" />
+      );
+    }
+    return <Wifi className={`w-4 h-4 ${getColor()}`} />;
+  };
+
+  const getText = () => {
+    if (reconnectState.isReconnecting) {
+      return `${Math.ceil(reconnectState.nextRetryIn / 1000)}s`;
+    }
+    if (!isConnected) {
+      return "offline";
+    }
+    return `${latency}ms`;
+  };
+
   return (
-    <div className="fixed top-4 right-4 z-40 flex items-center gap-2 bg-white/90 dark:bg-[#0A0A0A]/90 backdrop-blur-sm border border-[#EAEAEA] dark:border-[#1F1F23] rounded-full px-3 py-1.5 shadow-sm">
-      <Wifi className={`w-4 h-4 ${getColor()}`} />
-      <span className={`text-sm font-medium ${getColor()}`}>{latency}ms</span>
+    <div className="flex items-center gap-2">
+      {getIcon()}
+      <span className={`text-sm font-medium ${getColor()}`}>{getText()}</span>
+      {(!isConnected || reconnectState.isReconnecting) && onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="ml-1 px-2 py-0.5 text-[10px] font-medium rounded bg-[#111] dark:bg-white text-white dark:text-black hover:opacity-80 transition-opacity"
+        >
+          Retry
+        </button>
+      )}
     </div>
   );
 }
@@ -256,19 +232,5 @@ function RoomController({ roomId }: { roomId: string }) {
     );
   }
 
-  return (
-    <>
-      {/* Reconnection overlay */}
-      <ReconnectionOverlay
-        reconnectState={reconnectState}
-        error={error}
-        onRetry={forceReconnect}
-      />
-
-      {/* Connection status indicator */}
-      <ConnectionStatus isConnected={isConnected} latency={latency} />
-
-      <PlayerDashboard />
-    </>
-  );
+  return <PlayerDashboard />;
 }
