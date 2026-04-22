@@ -9,15 +9,37 @@ import type {
 } from "@/types";
 import { DurableObject } from "cloudflare:workers";
 
+// ─── Rate limit bucket configuration ────────────────────────────────
+interface RateLimitBucket {
+  maxRequests: number;
+  windowMs: number;
+}
+
+const RATE_LIMIT_BUCKETS: Record<string, RateLimitBucket> = {
+  control: { maxRequests: 5, windowMs: 2000 }, // play/pause/seek: 5 per 2s
+  chat: { maxRequests: 10, windowMs: 5000 }, // chat: 10 per 5s
+  status: { maxRequests: 1, windowMs: 1000 }, // time updates: 1 per 1s
+  default: { maxRequests: 20, windowMs: 5000 }, // everything else: 20 per 5s
+};
+
 // ─── Session attachment (serialized onto each WebSocket) ───────────
 interface SessionAttachment {
   userId: string;
   peerId: string;
   displayName: string;
   avatar?: string;
-  isHost: boolean;
   /** User's last reported local video timestamp */
   videoTimestamp?: number;
+  /** User's measured latency in milliseconds */
+  latency?: number;
+  /** Rate limit tracking - using plain object for serialization */
+  rateLimitInfo?: RateLimitInfo;
+}
+
+interface RateLimitInfo {
+  lastReset: number;
+  /** Plain object for serialization (Map doesn't serialize well) */
+  counts: Record<string, number>;
 }
 
 // ─── Default permissions ───────────────────────────────────────────
@@ -25,6 +47,10 @@ const DEFAULT_PERMISSIONS: RoomPermissions = {
   viewersCanControl: true,
   viewersCanChat: true,
 };
+
+// ─── Room deletion settings ────────────────────────────────────────
+const ROOM_INACTIVITY_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24 hours
+const ROOM_ACTIVE_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour (if users still connected)
 
 // ─── Room Durable Object ───────────────────────────────────────────
 export class Room extends DurableObject<Env> {
@@ -41,11 +67,6 @@ export class Room extends DurableObject<Env> {
         this.sessions.set(ws, { ...attachment });
       }
     }
-
-    // Automatic ping/pong that doesn't wake the DO from hibernation
-    this.ctx.setWebSocketAutoResponse(
-      new WebSocketRequestResponsePair("ping", "pong"),
-    );
   }
 
   // ─── RPC: Check if room exists ──────────────────────────────────
@@ -58,37 +79,44 @@ export class Room extends DurableObject<Env> {
   async createRoom(
     name: string,
     password?: string,
-    hostPeerId?: string,
   ): Promise<CreateRoomResponse | { conflict: true }> {
     const existingName = await this.ctx.storage.get<string>("name");
-    const existingHostPeerId = await this.ctx.storage.get<string>("hostPeerId");
 
-    // If the room is already claimed (has a stored hostPeerId), reject it
-    if (existingName && existingHostPeerId) {
+    // If the room already exists, reject it
+    if (existingName) {
       return { conflict: true };
     }
 
-    const initialData: Record<string, any> = {
+    interface RoomInitialData {
+      name: string;
+      paused: boolean;
+      currentTime: number;
+      playbackRate: number;
+      password?: string;
+      permissions: RoomPermissions;
+      videoUrl?: string;
+      createdAt: number;
+      lastActivityAt: number;
+    }
+
+    const initialData: Record<string, unknown> = {
       name,
       paused: true,
       currentTime: 0,
       playbackRate: 1,
+      permissions: DEFAULT_PERMISSIONS,
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
     };
 
     if (password) {
       initialData.password = password;
-    } else {
-      await this.ctx.storage.delete("password");
-    }
-
-    // Set default permissions
-    initialData.permissions = DEFAULT_PERMISSIONS;
-
-    if (hostPeerId) {
-      initialData.hostPeerId = hostPeerId;
     }
 
     await this.ctx.storage.put(initialData);
+
+    // Schedule initial inactivity check
+    await this.scheduleInactivityCheck();
 
     return { roomId: this.ctx.id.toString(), name };
   }
@@ -97,6 +125,37 @@ export class Room extends DurableObject<Env> {
   async getRoomState(): Promise<RoomStateResponse> {
     const room = await this.buildRoomSnapshot();
     return { room };
+  }
+
+  // ─── Schedule inactivity check alarm ────────────────────────────
+  private async scheduleInactivityCheck(): Promise<void> {
+    const alarmTime = Date.now() + ROOM_INACTIVITY_TIMEOUT_MS;
+    await this.ctx.storage.setAlarm(alarmTime);
+  }
+
+  // ─── Update last activity timestamp ───────────────────────────────
+  private async updateActivity(): Promise<void> {
+    await this.ctx.storage.put("lastActivityAt", Date.now());
+  }
+
+  // ─── Alarm handler for room cleanup ──────────────────────────────
+  async alarm(): Promise<void> {
+    // Check if room has users connected
+    if (this.sessions.size === 0) {
+      // No users connected - check if it's been inactive for 24 hours
+      const lastActivity = await this.ctx.storage.get<number>("lastActivityAt");
+      const now = Date.now();
+
+      if (lastActivity && now - lastActivity > ROOM_INACTIVITY_TIMEOUT_MS) {
+        // Room has been inactive for 24 hours - delete it
+        await this.ctx.storage.deleteAll();
+        return;
+      }
+    }
+
+    // Either users are connected or room hasn't been inactive long enough
+    // Schedule another check
+    await this.scheduleInactivityCheck();
   }
 
   // ─── WebSocket upgrade via fetch() ──────────────────────────────
@@ -125,7 +184,6 @@ export class Room extends DurableObject<Env> {
       userId,
       peerId: "", // Will be set on Join
       displayName: "Anonymous",
-      isHost: false, // Will be set on Join
     };
     server.serializeAttachment(attachment);
     this.sessions.set(server, attachment);
@@ -157,6 +215,24 @@ export class Room extends DurableObject<Env> {
 
     const session = this.sessions.get(ws);
     if (!session) return;
+
+    // Check rate limits
+    if (this.isRateLimited(session, parsed.type)) {
+      this.send(ws, {
+        type: "error",
+        code: "RATE_LIMITED",
+        message: "Too many requests. Please slow down.",
+        retryAfter: 2,
+      });
+      return;
+    }
+
+    // Update activity on user actions
+    if (
+      ["play", "pause", "seek", "chat", "join", "leave"].includes(parsed.type)
+    ) {
+      await this.updateActivity();
+    }
 
     switch (parsed.type) {
       case "join":
@@ -214,6 +290,13 @@ export class Room extends DurableObject<Env> {
       case "update-permissions":
         await this.handleUpdatePermissions(ws, session, parsed.permissions);
         break;
+      case "ping":
+        // Handle ping with pong response - this measures actual DO processing latency
+        this.send(ws, { type: "pong", timestamp: parsed.timestamp });
+        break;
+      case "video-url":
+        await this.handleVideoUrlUpdate(ws, session, parsed.url);
+        break;
       default:
         this.send(ws, {
           type: "error",
@@ -242,6 +325,9 @@ export class Room extends DurableObject<Env> {
     if (session) {
       this.broadcast({ type: "user-left", userId: session.userId });
     }
+
+    // Update activity and check if we should schedule cleanup
+    await this.updateActivity();
   }
 
   // ─── WebSocket error handler ────────────────────────────────────
@@ -252,10 +338,60 @@ export class Room extends DurableObject<Env> {
     if (session) {
       this.broadcast({ type: "user-left", userId: session.userId });
     }
+
+    await this.updateActivity();
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  Private helpers
+  // Rate limiting
+  // ═══════════════════════════════════════════════════════════════════
+
+  private isRateLimited(
+    session: SessionAttachment,
+    messageType: string,
+  ): boolean {
+    const now = Date.now();
+
+    // Initialize rate limit info if not present
+    if (!session.rateLimitInfo) {
+      session.rateLimitInfo = {
+        lastReset: now,
+        counts: {},
+      };
+    }
+
+    const rateInfo = session.rateLimitInfo;
+
+    // Determine which bucket this message type belongs to
+    let bucketName = "default";
+    if (["play", "pause", "seek"].includes(messageType)) {
+      bucketName = "control";
+    } else if (messageType === "chat") {
+      bucketName = "chat";
+    } else if (messageType === "time-update") {
+      bucketName = "status";
+    }
+
+    const bucket = RATE_LIMIT_BUCKETS[bucketName];
+
+    // Reset counters if window has passed
+    if (now - rateInfo.lastReset > bucket.windowMs) {
+      rateInfo.lastReset = now;
+      rateInfo.counts = {};
+    }
+
+    // Check and increment counter
+    const currentCount = rateInfo.counts[bucketName] || 0;
+    if (currentCount >= bucket.maxRequests) {
+      return true; // Rate limited
+    }
+
+    rateInfo.counts[bucketName] = currentCount + 1;
+    return false;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Private helpers
   // ═══════════════════════════════════════════════════════════════════
 
   private async handleJoin(
@@ -273,30 +409,6 @@ export class Room extends DurableObject<Env> {
       ws.close(1008, "Invalid room password");
       this.sessions.delete(ws);
       return;
-    }
-
-    const hostPeerId = await this.ctx.storage.get<string>("hostPeerId");
-    const hasActiveHost = Array.from(this.sessions.values()).some(
-      (s) => s.isHost && s.peerId !== msg.user.peerId,
-    );
-
-    let isHost = msg.user.isHost;
-
-    if (hostPeerId) {
-      // If a hostPeerId exists, only a matching peerId can be host
-      if (msg.user.peerId === hostPeerId) {
-        isHost = true;
-      } else {
-        isHost = false;
-      }
-    } else if (isHost) {
-      // If no hostPeerId exists yet, the first person who claims to be host sets it
-      await this.ctx.storage.put("hostPeerId", msg.user.peerId);
-    }
-
-    // Double check: if there's already an active host (different peer), demote this one
-    if (isHost && hasActiveHost) {
-      isHost = false;
     }
 
     // Generate userId from slugified displayName
@@ -321,7 +433,6 @@ export class Room extends DurableObject<Env> {
     session.displayName = msg.user.displayName;
     session.peerId = msg.user.peerId;
     session.avatar = msg.user.avatar;
-    session.isHost = isHost;
     ws.serializeAttachment(session);
     this.sessions.set(ws, session);
 
@@ -348,26 +459,14 @@ export class Room extends DurableObject<Env> {
     ws.close(1000, "User left");
   }
 
-  /** Unified playback action handler with permission enforcement */
+  /** Unified playback action handler - anyone can control */
   private async handlePlaybackAction(
     ws: WebSocket,
     session: SessionAttachment,
     action: "play" | "pause" | "seek",
     currentTime: number,
   ): Promise<void> {
-    // Check permissions: only enforce if viewersCanControl is explicitly false
-    if (!session.isHost) {
-      const permissions = await this.getPermissions();
-      if (!permissions.viewersCanControl) {
-        this.send(ws, {
-          type: "error",
-          code: "PERMISSION_DENIED",
-          message: "You don't have permission to control playback",
-        });
-        return;
-      }
-    }
-
+    // Everyone can control playback - no permission checks
     switch (action) {
       case "play":
         await this.ctx.storage.put({ paused: false, currentTime });
@@ -376,13 +475,16 @@ export class Room extends DurableObject<Env> {
           ws,
         );
         break;
-      case "pause":
-        await this.ctx.storage.put({ paused: true, currentTime });
+      case "pause": {
+        // When pausing, seek to the furthest user's position
+        const furthestTime = this.getFurthestUserTime(currentTime);
+        await this.ctx.storage.put({ paused: true, currentTime: furthestTime });
         this.broadcast(
-          { type: "pause", currentTime, userId: session.userId },
+          { type: "pause", currentTime: furthestTime, userId: session.userId },
           ws,
         );
         break;
+      }
       case "seek":
         await this.ctx.storage.put("currentTime", currentTime);
         this.broadcast(
@@ -393,23 +495,23 @@ export class Room extends DurableObject<Env> {
     }
   }
 
+  /** Get the furthest timestamp among all users */
+  private getFurthestUserTime(currentTime: number): number {
+    let maxTime = currentTime;
+    for (const [, session] of this.sessions) {
+      if (session.videoTimestamp && session.videoTimestamp > maxTime) {
+        maxTime = session.videoTimestamp;
+      }
+    }
+    return maxTime;
+  }
+
   private async handleChat(
     ws: WebSocket,
     session: SessionAttachment,
     message: string,
   ): Promise<void> {
-    if (!session.isHost) {
-      const permissions = await this.getPermissions();
-      if (!permissions.viewersCanChat) {
-        this.send(ws, {
-          type: "error",
-          code: "PERMISSION_DENIED",
-          message: "Chat is disabled by the host",
-        });
-        return;
-      }
-    }
-
+    // Everyone can chat - no permission checks
     this.broadcast({
       type: "chat",
       message,
@@ -444,24 +546,15 @@ export class Room extends DurableObject<Env> {
     session: SessionAttachment,
     targetUserId: string,
   ): Promise<void> {
-    // Only host can kick
-    if (!session.isHost) {
-      this.send(ws, {
-        type: "error",
-        code: "PERMISSION_DENIED",
-        message: "Only the host can kick users",
-      });
-      return;
-    }
-
+    // Anyone can kick anyone - democratic approach
     // Find and disconnect the target user
     for (const [targetWs, targetSession] of this.sessions) {
       if (targetSession.userId === targetUserId) {
         this.send(targetWs, {
           type: "kicked",
-          reason: "You have been kicked by the host",
+          reason: "You have been kicked from the room",
         });
-        targetWs.close(1000, "Kicked by host");
+        targetWs.close(1000, "Kicked from room");
         this.sessions.delete(targetWs);
         this.broadcast({ type: "user-left", userId: targetUserId });
         return;
@@ -474,20 +567,27 @@ export class Room extends DurableObject<Env> {
     session: SessionAttachment,
     newPerms: Partial<RoomPermissions>,
   ): Promise<void> {
-    if (!session.isHost) {
-      this.send(ws, {
-        type: "error",
-        code: "PERMISSION_DENIED",
-        message: "Only the host can update permissions",
-      });
-      return;
-    }
-
+    // Anyone can update permissions - democratic approach
     const current = await this.getPermissions();
     const merged: RoomPermissions = { ...current, ...newPerms };
     await this.ctx.storage.put("permissions", merged);
 
     this.broadcast({ type: "permissions-updated", permissions: merged });
+  }
+
+  private async handleVideoUrlUpdate(
+    ws: WebSocket,
+    session: SessionAttachment,
+    url: string,
+  ): Promise<void> {
+    // Store the video URL and broadcast to all users
+    await this.ctx.storage.put("videoUrl", url);
+    this.broadcast({
+      type: "video-url",
+      url,
+      userId: session.userId,
+      displayName: session.displayName,
+    });
   }
 
   private async getPermissions(): Promise<RoomPermissions> {
@@ -519,13 +619,14 @@ export class Room extends DurableObject<Env> {
 
   /** Build a Room snapshot from storage + active sessions */
   private async buildRoomSnapshot(): Promise<RoomState> {
-    const [name, paused, currentTime, playbackRate, permissions] =
+    const [name, paused, currentTime, playbackRate, permissions, videoUrl] =
       await Promise.all([
         this.ctx.storage.get<string>("name"),
         this.ctx.storage.get<boolean>("paused"),
         this.ctx.storage.get<number>("currentTime"),
         this.ctx.storage.get<number>("playbackRate"),
         this.getPermissions(),
+        this.ctx.storage.get<string>("videoUrl"),
       ]);
 
     const users: User[] = [];
@@ -541,6 +642,7 @@ export class Room extends DurableObject<Env> {
       paused: paused ?? true,
       playbackRate: playbackRate ?? 1,
       permissions,
+      videoUrl,
     };
   }
 
@@ -551,9 +653,9 @@ export class Room extends DurableObject<Env> {
       peerId: session.peerId,
       displayName: session.displayName,
       avatar: session.avatar,
-      isHost: session.isHost,
       connectionStatus: "online",
       videoTimestamp: session.videoTimestamp,
+      latency: session.latency,
     };
   }
 }

@@ -13,7 +13,8 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { useRoom } from "@/lib/room-context";
-import { Settings, Shield, Sliders, Lock } from "lucide-react";
+import type { RoomPermissions } from "@/types";
+import { Settings, Shield, Sliders, Lock, Users } from "lucide-react";
 import { toast } from "sonner";
 
 export function RoomSettingsDialog({
@@ -21,21 +22,15 @@ export function RoomSettingsDialog({
 }: {
   children: React.ReactNode;
 }) {
-  const { roomState, currentUser, updatePermissions } = useRoom();
-  const isHost = currentUser?.isHost ?? false;
+  const { roomState, updatePermissions } = useRoom();
   const permissions = roomState?.permissions;
 
-  const [syncThreshold, setSyncThreshold] = useState(0.5);
+  const [syncThreshold, setSyncThreshold] = useState(2.0);
   const [autoPauseOnBuffering, setAutoPauseOnBuffering] = useState(true);
-  const [isPrivate, setIsPrivate] = useState(false);
   const [open, setOpen] = useState(false);
 
   const handleOpenChange = useCallback((isOpen: boolean) => {
     setOpen(isOpen);
-    if (isOpen) {
-      // Reset to current values when opening
-      setIsPrivate(false);
-    }
   }, []);
 
   const handleSave = () => {
@@ -50,6 +45,15 @@ export function RoomSettingsDialog({
     setOpen(false);
   };
 
+  const handlePermissionChange = (
+    key: keyof RoomPermissions,
+    value: boolean,
+  ) => {
+    if (permissions) {
+      updatePermissions({ ...permissions, [key]: value });
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>{children}</DialogTrigger>
@@ -60,9 +64,8 @@ export function RoomSettingsDialog({
             Room Settings
           </DialogTitle>
           <DialogDescription className="text-xs text-[#6B7280] dark:text-[#A1A1AA] mt-1">
-            {isHost
-              ? "Configure synchronization and room access."
-              : "View room settings. Only the host can modify."}
+            Configure synchronization and room access. Anyone can change these
+            settings.
           </DialogDescription>
         </DialogHeader>
 
@@ -88,9 +91,8 @@ export function RoomSettingsDialog({
                   value={[syncThreshold]}
                   onValueChange={([v]) => setSyncThreshold(v)}
                   min={0.1}
-                  max={3}
+                  max={5}
                   step={0.1}
-                  disabled={!isHost}
                   className="w-full"
                 />
                 <p className="text-[10px] text-[#6B7280] dark:text-[#A1A1AA] mt-1.5">
@@ -111,53 +113,92 @@ export function RoomSettingsDialog({
                 <Switch
                   checked={autoPauseOnBuffering}
                   onCheckedChange={setAutoPauseOnBuffering}
-                  disabled={!isHost}
                 />
               </div>
             </div>
           </div>
 
-          {/* Privacy & Access */}
+          {/* Permissions */}
+          <div className="px-6 py-6 border-b border-[#E5E7EB] dark:border-[#1F1F23]">
+            <h3 className="text-xs font-bold text-[#111827] dark:text-[#EDEDED] uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Users size={16} />
+              Room Permissions
+            </h3>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between p-3 rounded-lg border border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50 dark:bg-[#111111]">
+                <div className="flex flex-col">
+                  <span className="text-sm font-medium text-[#111827] dark:text-[#EDEDED]">
+                    Allow Playback Control
+                  </span>
+                  <span className="text-[10px] text-[#6B7280] dark:text-[#A1A1AA]">
+                    Everyone can play, pause, and seek
+                  </span>
+                </div>
+                <Switch
+                  checked={permissions?.viewersCanControl ?? true}
+                  onCheckedChange={(checked) =>
+                    handlePermissionChange("viewersCanControl", checked)
+                  }
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-lg border border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50 dark:bg-[#111111]">
+                <div className="flex flex-col">
+                  <span className="text-sm font-medium text-[#111827] dark:text-[#EDEDED]">
+                    Allow Chat
+                  </span>
+                  <span className="text-[10px] text-[#6B7280] dark:text-[#A1A1AA]">
+                    Everyone can send chat messages
+                  </span>
+                </div>
+                <Switch
+                  checked={permissions?.viewersCanChat ?? true}
+                  onCheckedChange={(checked) =>
+                    handlePermissionChange("viewersCanChat", checked)
+                  }
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Info */}
           <div className="px-6 py-6">
             <h3 className="text-xs font-bold text-[#111827] dark:text-[#EDEDED] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Shield size={16} />
-              Privacy & Access
+              About This Room
             </h3>
-
-            <div className="flex items-center justify-between p-3 rounded-lg border border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50 dark:bg-[#111111]">
-              <div className="flex items-center gap-3">
-                <Lock
-                  size={16}
-                  className="text-[#6B7280] dark:text-[#A1A1AA]"
-                />
-                <div className="flex flex-col">
-                  <span className="text-sm font-medium text-[#111827] dark:text-[#EDEDED]">
-                    Private Room
-                  </span>
-                  <span className="text-[10px] text-[#6B7280] dark:text-[#A1A1AA]">
-                    Require password to join
-                  </span>
-                </div>
-              </div>
-              <Switch
-                checked={isPrivate}
-                onCheckedChange={setIsPrivate}
-                disabled={!isHost}
-              />
+            <div className="p-3 rounded-lg border border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50 dark:bg-[#111111] text-xs text-[#6B7280] dark:text-[#A1A1AA]">
+              <p className="mb-2">
+                <strong className="text-[#111827] dark:text-[#EDEDED]">
+                  Room ID:
+                </strong>{" "}
+                {roomState?.id}
+              </p>
+              <p className="mb-2">
+                <strong className="text-[#111827] dark:text-[#EDEDED]">
+                  Auto-deletion:
+                </strong>{" "}
+                Room will be deleted after 24 hours of inactivity
+              </p>
+              <p>
+                <strong className="text-[#111827] dark:text-[#EDEDED]">
+                  Democracy mode:
+                </strong>{" "}
+                Anyone can control playback and change settings
+              </p>
             </div>
           </div>
         </div>
 
-        {isHost && (
-          <div className="px-6 py-4 border-t border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50/50 dark:bg-[#111111]/50 flex justify-end gap-3">
-            <Button variant="ghost" onClick={handleDiscard} className="text-xs">
-              Discard Changes
-            </Button>
-            <Button onClick={handleSave} className="text-xs">
-              Save Configuration
-            </Button>
-          </div>
-        )}
+        <div className="px-6 py-4 border-t border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50/50 dark:bg-[#111111]/50 flex justify-end gap-3">
+          <Button variant="ghost" onClick={handleDiscard} className="text-xs">
+            Close
+          </Button>
+          <Button onClick={handleSave} className="text-xs">
+            Save Changes
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   );

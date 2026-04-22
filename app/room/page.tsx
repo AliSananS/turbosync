@@ -51,10 +51,10 @@ export default function RoomHome() {
       localStorage.setItem("turbosync_name", createDisplayName.trim());
 
       // Get or create persistent peerId
-      let hostPeerId = localStorage.getItem("turbosync_peerid");
-      if (!hostPeerId) {
-        hostPeerId = crypto.randomUUID();
-        localStorage.setItem("turbosync_peerid", hostPeerId);
+      let peerId = localStorage.getItem("turbosync_peerid");
+      if (!peerId) {
+        peerId = crypto.randomUUID();
+        localStorage.setItem("turbosync_peerid", peerId);
       }
 
       const res = await fetch("/api/room/create", {
@@ -63,7 +63,6 @@ export default function RoomHome() {
         body: JSON.stringify({
           name: roomName.trim(),
           password: password.trim() || undefined,
-          hostPeerId,
         }),
       });
 
@@ -85,8 +84,7 @@ export default function RoomHome() {
         JSON.stringify({
           displayName: createDisplayName.trim(),
           password: password.trim() || undefined,
-          isHost: true,
-          peerId: hostPeerId,
+          peerId,
         }),
       );
 
@@ -140,7 +138,6 @@ export default function RoomHome() {
       JSON.stringify({
         displayName: joinDisplayName.trim(),
         password: joinPassword.trim() || undefined,
-        isHost: false,
         peerId,
       }),
     );
@@ -256,7 +253,7 @@ export default function RoomHome() {
                 className="bg-gray-50 dark:bg-[#111111] border-[#EAEAEA] dark:border-[#1F1F23]"
               />
               <p className="text-[11px] text-[#999] dark:text-[#555]">
-                Your name as shown to the host and other viewers.
+                Your name as shown to other viewers in the room.
               </p>
             </div>
 
@@ -271,7 +268,7 @@ export default function RoomHome() {
                 className="bg-gray-50 dark:bg-[#111111] border-[#EAEAEA] dark:border-[#1F1F23]"
               />
               <p className="text-[11px] text-[#999] dark:text-[#555]">
-                Enter the exact room name shared by the host.
+                Enter the exact room name shared with you.
               </p>
             </div>
 
@@ -288,7 +285,7 @@ export default function RoomHome() {
                 className="bg-gray-50 dark:bg-[#111111] border-[#EAEAEA] dark:border-[#1F1F23]"
               />
               <p className="text-[11px] text-[#999] dark:text-[#555]">
-                Required only if the host set a password.
+                Required only if the room has a password set.
               </p>
             </div>
 

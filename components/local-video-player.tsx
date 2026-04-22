@@ -10,11 +10,24 @@ import React, {
 } from "react";
 import { VideoPlayer, VideoPlayerHandle } from "@/components/video-player";
 import { useRoom } from "@/lib/room-context";
-import { Upload, Film, Subtitles, Link, HardDrive } from "lucide-react";
+import {
+  Upload,
+  Film,
+  Subtitles,
+  Link,
+  HardDrive,
+  Share2,
+  Play,
+  AlertCircle,
+  CheckCircle2,
+  X,
+  Globe,
+  ExternalLink,
+} from "lucide-react";
 import { toast } from "sonner";
 
 /* ------------------------------------------------------------------ */
-/*  IndexedDB Helpers                                                  */
+/* IndexedDB Helpers */
 /* ------------------------------------------------------------------ */
 
 const DB_NAME = "turbosync_db";
@@ -63,13 +76,13 @@ async function getFile(roomId: string): Promise<File | undefined> {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Public handle — same shape as VideoPlayerHandle                     */
+/* Public handle — same shape as VideoPlayerHandle */
 /* ------------------------------------------------------------------ */
 
 export type LocalVideoPlayerHandle = VideoPlayerHandle;
 
 /* ------------------------------------------------------------------ */
-/*  Props                                                              */
+/* Props */
 /* ------------------------------------------------------------------ */
 
 export interface LocalVideoPlayerProps {
@@ -88,7 +101,86 @@ export interface LocalVideoPlayerProps {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Component                                                          */
+/* Validation & URL Helpers */
+/* ------------------------------------------------------------------ */
+
+function isValidUrl(urlStr: string): boolean {
+  try {
+    const u = new URL(urlStr);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function getVideoFileName(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    const pathname = urlObj.pathname;
+    const filename = pathname.split("/").pop() || "video";
+    return decodeURIComponent(filename);
+  } catch {
+    return "video";
+  }
+}
+
+function hasVideoExtension(url: string): boolean {
+  const videoExtensions = [
+    ".mp4",
+    ".webm",
+    ".mkv",
+    ".mov",
+    ".avi",
+    ".m4v",
+    ".ogv",
+  ];
+  const lowerUrl = url.toLowerCase();
+  return videoExtensions.some((ext) => lowerUrl.includes(ext));
+}
+
+async function validateVideoUrl(url: string): Promise<{
+  valid: boolean;
+  error?: string;
+  corsIssue?: boolean;
+}> {
+  if (!isValidUrl(url)) {
+    return {
+      valid: false,
+      error: "Invalid URL format. Must start with http:// or https://",
+    };
+  }
+
+  // Check for video-like extension or path pattern
+  if (!hasVideoExtension(url)) {
+    // Don't block - some URLs don't have extensions but still work
+    console.warn("URL doesn't have typical video extension");
+  }
+
+  try {
+    // Try a HEAD request to check if the resource exists and is accessible
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(url, {
+      method: "HEAD",
+      mode: "no-cors",
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    // no-cors mode doesn't give us status, but if it doesn't throw, the resource exists
+    return { valid: true };
+  } catch (err) {
+    // If HEAD fails, it might be a CORS issue - the video might still work
+    // in the video element since it uses different fetching rules
+    console.log("HEAD request failed, assuming potential CORS issue:", err);
+    return { valid: true, corsIssue: true };
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Component */
 /* ------------------------------------------------------------------ */
 
 export const LocalVideoPlayer = forwardRef<
@@ -100,7 +192,8 @@ export const LocalVideoPlayer = forwardRef<
     ref,
   ) => {
     const playerRef = useRef<VideoPlayerHandle>(null);
-    const { roomState } = useRoom();
+    const { roomState, setVideoUrl, pendingVideoUrl, clearPendingVideoUrl } =
+      useRoom();
 
     const [videoSrc, setVideoSrc] = useState<string | null>(null);
     const [subtitleSrc, setSubtitleSrc] = useState<string | null>(null);
@@ -115,9 +208,19 @@ export const LocalVideoPlayer = forwardRef<
     const [videoUrlInput, setVideoUrlInput] = useState("");
     const [subtitleUrlInput, setSubtitleUrlInput] = useState("");
     const [isLoadingUrl, setIsLoadingUrl] = useState(false);
+    const [urlValidation, setUrlValidation] = useState<{
+      status: "idle" | "validating" | "valid" | "invalid";
+      message?: string;
+      corsWarning?: boolean;
+    }>({ status: "idle" });
+
+    const [showSharePrompt, setShowSharePrompt] = useState(false);
+    const [corsError, setCorsError] = useState(false);
+    const [videoLoadError, setVideoLoadError] = useState<string | null>(null);
 
     const videoInputRef = useRef<HTMLInputElement>(null);
     const subtitleInputRef = useRef<HTMLInputElement>(null);
+    const videoElementRef = useRef<HTMLVideoElement | null>(null);
 
     // Forward handle from inner VideoPlayer
     useImperativeHandle(ref, () => ({
@@ -151,9 +254,14 @@ export const LocalVideoPlayer = forwardRef<
           return;
         }
         setVideoSrc(URL.createObjectURL(file));
+        setCorsError(false);
+        setVideoLoadError(null);
         if (!restore) {
           saveFile(roomId, file);
           toast.success("Video loaded", { description: file.name });
+          // Clear any shared URL since we're loading a local file
+          setVideoUrlInput("");
+          setUrlValidation({ status: "idle" });
         } else {
           toast.info("Restored previous video", { description: file.name });
         }
@@ -172,36 +280,96 @@ export const LocalVideoPlayer = forwardRef<
       toast.success("Subtitles loaded", { description: file.name });
     }, []);
 
-    /* ---- URL handling --------------------------------------------- */
+    /* ---- URL validation ------------------------------------------- */
 
-    const isValidUrl = useCallback((urlStr: string): boolean => {
-      try {
-        const u = new URL(urlStr);
-        return u.protocol === "http:" || u.protocol === "https:";
-      } catch {
-        return false;
+    const validateUrlInput = useCallback(async (url: string) => {
+      if (!url.trim()) {
+        setUrlValidation({ status: "idle" });
+        return;
+      }
+
+      setUrlValidation({ status: "validating" });
+
+      const result = await validateVideoUrl(url);
+
+      if (result.valid) {
+        setUrlValidation({
+          status: "valid",
+          message: result.corsIssue
+            ? "URL is valid but may have CORS restrictions"
+            : "URL looks valid",
+          corsWarning: result.corsIssue,
+        });
+      } else {
+        setUrlValidation({
+          status: "invalid",
+          message: result.error || "Invalid URL",
+        });
       }
     }, []);
 
-    const handleVideoUrl = useCallback(() => {
-      const url = videoUrlInput.trim();
-      if (!url) {
-        toast.error("No URL", { description: "Please enter a video URL." });
-        return;
-      }
-      if (!isValidUrl(url)) {
-        toast.error("Invalid URL", {
-          description: "Enter a valid http:// or https:// URL.",
+    // Debounced validation
+    useEffect(() => {
+      const timeoutId = setTimeout(() => {
+        if (videoUrlInput) {
+          validateUrlInput(videoUrlInput);
+        } else {
+          setUrlValidation({ status: "idle" });
+        }
+      }, 500);
+
+      return () => clearTimeout(timeoutId);
+    }, [videoUrlInput, validateUrlInput]);
+
+    /* ---- URL handling --------------------------------------------- */
+
+    const handleVideoUrl = useCallback(
+      async (url?: string, skipValidation = false) => {
+        const targetUrl = (url || videoUrlInput).trim();
+        if (!targetUrl) {
+          toast.error("No URL", { description: "Please enter a video URL." });
+          return;
+        }
+
+        if (!isValidUrl(targetUrl)) {
+          toast.error("Invalid URL", {
+            description: "Enter a valid http:// or https:// URL.",
+          });
+          return;
+        }
+
+        setIsLoadingUrl(true);
+        setCorsError(false);
+        setVideoLoadError(null);
+
+        if (!skipValidation) {
+          const validation = await validateVideoUrl(targetUrl);
+          if (!validation.valid) {
+            toast.error("URL Validation Failed", {
+              description: validation.error,
+            });
+            setIsLoadingUrl(false);
+            return;
+          }
+
+          if (validation.corsIssue) {
+            toast.warning("CORS Warning", {
+              description:
+                "This URL may be blocked by CORS. If the video doesn't load, try a different source.",
+            });
+          }
+        }
+
+        setVideoSrc(targetUrl);
+        setVideoUrlInput(targetUrl);
+        toast.success("Video URL set", {
+          description: getVideoFileName(targetUrl),
         });
-        return;
-      }
-      setIsLoadingUrl(true);
-      setVideoSrc(url);
-      toast.success("Video URL set", {
-        description: url.length > 60 ? `${url.slice(0, 60)}...` : url,
-      });
-      setIsLoadingUrl(false);
-    }, [videoUrlInput, isValidUrl]);
+        setIsLoadingUrl(false);
+        setSourceMode("url");
+      },
+      [videoUrlInput],
+    );
 
     const handleSubtitleUrl = useCallback(() => {
       const url = subtitleUrlInput.trim();
@@ -223,7 +391,40 @@ export const LocalVideoPlayer = forwardRef<
       toast.success("Subtitle URL set", {
         description: url.length > 60 ? `${url.slice(0, 60)}...` : url,
       });
-    }, [subtitleUrlInput, isValidUrl]);
+    }, [subtitleUrlInput]);
+
+    /* ---- Video sharing -------------------------------------------- */
+
+    const handleShareVideo = useCallback(() => {
+      if (!videoSrc || videoSrc.startsWith("blob:")) {
+        toast.error("Cannot share", {
+          description: "Only URL-based videos can be shared with the room.",
+        });
+        return;
+      }
+
+      setVideoUrl(videoSrc);
+      setShowSharePrompt(false);
+      toast.success("Video shared", {
+        description: "The video URL has been shared with everyone in the room.",
+      });
+    }, [videoSrc, setVideoUrl]);
+
+    const handleLoadSharedVideo = useCallback(
+      (url: string) => {
+        handleVideoUrl(url, true);
+        clearPendingVideoUrl();
+        toast.success("Loading shared video", {
+          description: getVideoFileName(url),
+        });
+      },
+      [handleVideoUrl, clearPendingVideoUrl],
+    );
+
+    const handleDeclineSharedVideo = useCallback(() => {
+      clearPendingVideoUrl();
+      toast.info("Declined shared video");
+    }, [clearPendingVideoUrl]);
 
     /* ---- Drag & Drop --------------------------------------------- */
 
@@ -269,6 +470,35 @@ export const LocalVideoPlayer = forwardRef<
       };
     }, [roomId, handleVideoFile]);
 
+    /* ---- Check for pending shared video -------------------------- */
+
+    useEffect(() => {
+      if (pendingVideoUrl && pendingVideoUrl !== videoSrc) {
+        // Show a toast notification
+        toast.info("New video available", {
+          description: "Someone shared a video. Click to load it.",
+          action: {
+            label: "Load",
+            onClick: () => handleLoadSharedVideo(pendingVideoUrl),
+          },
+          duration: 10000,
+        });
+      }
+    }, [pendingVideoUrl, videoSrc, handleLoadSharedVideo]);
+
+    /* ---- Check for room's shared video on join ------------------- */
+
+    useEffect(() => {
+      if (
+        roomState?.videoUrl &&
+        roomState.videoUrl !== videoSrc &&
+        !videoSrc?.startsWith("blob:")
+      ) {
+        // Room has a shared video that we haven't loaded yet
+        setShowSharePrompt(true);
+      }
+    }, [roomState?.videoUrl, videoSrc]);
+
     /* ---- Metadata loaded: sync with room state ------------------- */
 
     const handleLoadedMetadata = useCallback(() => {
@@ -288,6 +518,43 @@ export const LocalVideoPlayer = forwardRef<
       onLoadedMetadata?.();
     }, [roomState, onLoadedMetadata]);
 
+    /* ---- Video error handling ------------------------------------ */
+
+    const handleVideoError = useCallback(() => {
+      const video = videoElementRef.current;
+      if (video && video.error) {
+        const errorCode = video.error.code;
+        let errorMessage = "Failed to load video";
+        let isCors = false;
+
+        switch (errorCode) {
+          case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+            errorMessage = "Video format not supported or invalid URL";
+            break;
+          case MediaError.MEDIA_ERR_NETWORK:
+            errorMessage = "Network error - check your connection";
+            isCors = true;
+            break;
+          case MediaError.MEDIA_ERR_ABORTED:
+            errorMessage = "Video loading was aborted";
+            break;
+          case MediaError.MEDIA_ERR_DECODE:
+            errorMessage = "Video decoding error - file may be corrupted";
+            break;
+          default:
+            errorMessage = "Failed to load video (possible CORS restriction)";
+            isCors = true;
+        }
+
+        setVideoLoadError(errorMessage);
+        setCorsError(isCors);
+
+        toast.error("Video Error", {
+          description: errorMessage,
+        });
+      }
+    }, []);
+
     /* ---- Resolution label ---------------------------------------- */
 
     const resLabel = resolution ? `${resolution.w}×${resolution.h}` : null;
@@ -302,6 +569,42 @@ export const LocalVideoPlayer = forwardRef<
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
+          {/* Shared video prompt */}
+          {roomState?.videoUrl && (
+            <div className="mb-4 p-4 rounded-xl bg-blue-500/10 border border-blue-500/20">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-blue-500/20">
+                  <Globe className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h4 className="text-sm font-semibold text-[#111827] dark:text-[#EDEDED]">
+                    Shared video available
+                  </h4>
+                  <p className="text-xs text-[#6B7280] dark:text-[#A1A1AA] mt-1 truncate">
+                    {getVideoFileName(roomState.videoUrl)}
+                  </p>
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      type="button"
+                      onClick={() => handleLoadSharedVideo(roomState.videoUrl!)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                    >
+                      <Play size={12} />
+                      Load this video
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowSharePrompt(false)}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg text-[#6B7280] dark:text-[#A1A1AA] hover:bg-[#F3F4F6] dark:hover:bg-[#111111] transition-colors"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Source mode tabs */}
           <div className="flex items-center gap-1 mb-3 p-1 rounded-lg bg-[#F3F4F6] dark:bg-[#111111] w-fit">
             <button
@@ -433,26 +736,66 @@ export const LocalVideoPlayer = forwardRef<
                   Video URL
                 </label>
                 <div className="flex gap-2">
-                  <input
-                    id="video-url-input"
-                    type="url"
-                    value={videoUrlInput}
-                    onChange={(e) => setVideoUrlInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleVideoUrl();
-                    }}
-                    placeholder="https://example.com/video.mp4"
-                    className="flex-1 px-3 py-2 text-sm rounded-lg border border-[#E5E7EB] dark:border-[#1F1F23] bg-white dark:bg-[#0A0A0A] text-[#111827] dark:text-[#EDEDED] placeholder:text-[#9CA3AF] dark:placeholder:text-[#52525B] focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition-all"
-                  />
+                  <div className="flex-1 relative">
+                    <input
+                      id="video-url-input"
+                      type="url"
+                      value={videoUrlInput}
+                      onChange={(e) => setVideoUrlInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleVideoUrl();
+                      }}
+                      placeholder="https://example.com/video.mp4"
+                      className={`w-full px-3 py-2 text-sm rounded-lg border bg-white dark:bg-[#0A0A0A] text-[#111827] dark:text-[#EDEDED] placeholder:text-[#9CA3AF] dark:placeholder:text-[#52525B] focus:outline-none focus:ring-2 transition-all ${
+                        urlValidation.status === "valid"
+                          ? "border-green-500 focus:ring-green-500/40 focus:border-green-500"
+                          : urlValidation.status === "invalid"
+                            ? "border-red-500 focus:ring-red-500/40 focus:border-red-500"
+                            : "border-[#E5E7EB] dark:border-[#1F1F23] focus:ring-blue-500/40 focus:border-blue-500"
+                      }`}
+                    />
+                    {urlValidation.status === "valid" && (
+                      <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />
+                    )}
+                    {urlValidation.status === "invalid" && (
+                      <AlertCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />
+                    )}
+                  </div>
                   <button
                     type="button"
-                    onClick={handleVideoUrl}
-                    disabled={isLoadingUrl || !videoUrlInput.trim()}
+                    onClick={() => handleVideoUrl()}
+                    disabled={
+                      isLoadingUrl ||
+                      !videoUrlInput.trim() ||
+                      urlValidation.status === "invalid"
+                    }
                     className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     {isLoadingUrl ? "Loading..." : "Load"}
                   </button>
                 </div>
+                {urlValidation.message && (
+                  <p
+                    className={`text-[11px] flex items-center gap-1 ${
+                      urlValidation.status === "valid"
+                        ? urlValidation.corsWarning
+                          ? "text-amber-600 dark:text-amber-400"
+                          : "text-green-600 dark:text-green-400"
+                        : "text-red-600 dark:text-red-400"
+                    }`}
+                  >
+                    {urlValidation.status === "valid" ? (
+                      urlValidation.corsWarning ? (
+                        <AlertCircle size={12} />
+                      ) : (
+                        <CheckCircle2 size={12} />
+                      )
+                    ) : (
+                      <AlertCircle size={12} />
+                    )}
+                    {urlValidation.message}
+                  </p>
+                )}
               </div>
 
               {/* Subtitle URL input */}
@@ -489,10 +832,16 @@ export const LocalVideoPlayer = forwardRef<
                 </div>
               </div>
 
-              <p className="text-[10px] text-[#9CA3AF] dark:text-[#52525B] text-center max-w-sm">
-                Paste a direct link to a video file. The URL must point to a
-                playable media file (MP4, WebM, etc).
-              </p>
+              <div className="text-[10px] text-[#9CA3AF] dark:text-[#52525B] text-center max-w-sm space-y-1">
+                <p>
+                  Paste a direct link to a video file. The URL must point to a
+                  playable media file (MP4, WebM, etc).
+                </p>
+                <p className="text-amber-600 dark:text-amber-400">
+                  Note: Some URLs may be blocked by CORS policies. If a video
+                  doesn't load, try a different source.
+                </p>
+              </div>
             </div>
           )}
 
@@ -549,6 +898,39 @@ export const LocalVideoPlayer = forwardRef<
           </div>
         )}
 
+        {/* CORS Error overlay */}
+        {corsError && videoLoadError && (
+          <div className="absolute inset-0 z-40 bg-black/80 flex items-center justify-center rounded-xl">
+            <div className="max-w-md p-6 text-center">
+              <div className="p-3 rounded-full bg-red-500/20 mx-auto w-fit mb-4">
+                <AlertCircle className="w-8 h-8 text-red-500" />
+              </div>
+              <h3 className="text-lg font-semibold text-white mb-2">
+                Video Unavailable
+              </h3>
+              <p className="text-sm text-gray-300 mb-4">{videoLoadError}</p>
+              <p className="text-xs text-gray-400 mb-4">
+                This video is blocked by CORS (Cross-Origin Resource Sharing)
+                policies. The server hosting this video doesn't allow it to be
+                played on other websites.
+              </p>
+              <div className="flex gap-2 justify-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVideoSrc(null);
+                    setCorsError(false);
+                    setVideoLoadError(null);
+                  }}
+                  className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                >
+                  Try Another Source
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <VideoPlayer
           ref={playerRef}
           src={videoSrc}
@@ -563,7 +945,91 @@ export const LocalVideoPlayer = forwardRef<
           onTimeUpdate={(current, dur) => onTimeUpdate?.(current, dur)}
           onLoadedMetadata={handleLoadedMetadata}
           onFullscreenChange={(fs) => setIsFullscreen(fs)}
+          onError={handleVideoError}
         />
+
+        {/* Current video info bar */}
+        <div className="mt-3 p-3 rounded-lg bg-[#F3F4F6] dark:bg-[#111111] border border-[#E5E7EB] dark:border-[#1F1F23]">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2 min-w-0">
+              <Film
+                size={16}
+                className="text-[#6B7280] dark:text-[#A1A1AA] flex-shrink-0"
+              />
+              <span className="text-xs text-[#6B7280] dark:text-[#A1A1AA] flex-shrink-0">
+                Current:
+              </span>
+              <span className="text-sm text-[#111827] dark:text-[#EDEDED] truncate font-medium">
+                {videoSrc.startsWith("blob:")
+                  ? "Local file"
+                  : getVideoFileName(videoSrc)}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {!videoSrc.startsWith("blob:") && (
+                <button
+                  type="button"
+                  onClick={handleShareVideo}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                >
+                  <Share2 size={12} />
+                  Share with Room
+                </button>
+              )}
+              {videoSrc.startsWith("blob:") ? (
+                <button
+                  type="button"
+                  onClick={() => videoInputRef.current?.click()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-[#6B7280] dark:text-[#A1A1AA] hover:text-[#111827] dark:hover:text-[#EDEDED] border border-[#E5E7EB] dark:border-[#1F1F23] rounded-lg hover:bg-[#F3F4F6] dark:hover:bg-[#1A1A1A] transition-colors"
+                >
+                  <Upload size={12} />
+                  Change Video
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVideoSrc(null);
+                    setVideoUrlInput("");
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-[#6B7280] dark:text-[#A1A1AA] hover:text-[#111827] dark:hover:text-[#EDEDED] border border-[#E5E7EB] dark:border-[#1F1F23] rounded-lg hover:bg-[#F3F4F6] dark:hover:bg-[#1A1A1A] transition-colors"
+                >
+                  <Link size={12} />
+                  Change Source
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Shared video info */}
+          {roomState?.videoUrl && roomState.videoUrl !== videoSrc && (
+            <div className="mt-3 pt-3 border-t border-[#E5E7EB] dark:border-[#1F1F23]">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Globe size={16} className="text-blue-500 flex-shrink-0" />
+                  <span className="text-xs text-[#6B7280] dark:text-[#A1A1AA] flex-shrink-0">
+                    Room video:
+                  </span>
+                  <span className="text-sm text-[#111827] dark:text-[#EDEDED] truncate font-medium">
+                    {getVideoFileName(roomState.videoUrl)}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (roomState?.videoUrl) {
+                      handleLoadSharedVideo(roomState.videoUrl);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors flex-shrink-0"
+                >
+                  <Play size={12} />
+                  Load Room Video
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Bottom toolbar: swap video / add subtitles */}
         <div className="flex items-center gap-2 mt-2">
@@ -582,6 +1048,8 @@ export const LocalVideoPlayer = forwardRef<
               setSubtitleSrc(null);
               setResolution(null);
               setSourceMode("url");
+              setCorsError(false);
+              setVideoLoadError(null);
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-[#6B7280] dark:text-[#A1A1AA] hover:text-[#111827] dark:hover:text-[#EDEDED] border border-[#E5E7EB] dark:border-[#1F1F23] rounded-lg hover:bg-[#F3F4F6] dark:hover:bg-[#111111] transition-colors"
           >

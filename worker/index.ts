@@ -98,7 +98,7 @@ export default {
 };
 
 // ═══════════════════════════════════════════════════════════════════
-//  REST API router
+// REST API router
 // ═══════════════════════════════════════════════════════════════════
 
 async function handleRoomApi(
@@ -127,13 +127,9 @@ async function handleRoomApi(
 
     const slug = toSlug(body.name);
     const stub = env.ROOM.get(env.ROOM.idFromName(slug));
-    const result = await stub.createRoom(
-      body.name,
-      body.password,
-      body.hostPeerId,
-    );
+    const result = await stub.createRoom(body.name, body.password);
 
-    // Room name is already taken by another host
+    // Room name is already taken
     if ("conflict" in result && result.conflict) {
       return jsonResponse<ApiErrorResponse>(
         {
@@ -172,8 +168,8 @@ async function handleRoomApi(
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  CORS Proxy — fetches a remote resource and serves it with CORS
-//  Usage: GET /api/proxy?url=<encoded-url>
+// CORS Proxy — fetches a remote resource and serves it with CORS
+// Usage: GET /api/proxy?url=<encoded-url>
 // ═══════════════════════════════════════════════════════════════════
 
 async function handleProxy(reqUrl: URL): Promise<Response> {

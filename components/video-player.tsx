@@ -81,6 +81,7 @@ export interface VideoPlayerProps {
   onVolumeChange?: (volume: number, muted: boolean) => void;
   onFullscreenChange?: (isFullscreen: boolean) => void;
   onSeek?: (time: number) => void;
+  onError?: () => void;
   renderPlayButton?: (
     isPlaying: boolean,
     toggle: () => void,
@@ -185,6 +186,7 @@ export const VideoPlayer = React.forwardRef<
       onVolumeChange,
       onFullscreenChange,
       onSeek,
+      onError,
 
       // Render Slots
       renderPlayButton,
@@ -345,7 +347,9 @@ export const VideoPlayer = React.forwardRef<
         onFullscreenChange?.(fs);
       };
       document.addEventListener("fullscreenchange", onFsChange);
-      return () => document.removeEventListener("fullscreenchange", onFsChange);
+      return () => {
+        document.removeEventListener("fullscreenchange", onFsChange);
+      };
     }, [onFullscreenChange]);
 
     /* ---- Auto-hide controls --------------------------------------- */
@@ -565,6 +569,7 @@ export const VideoPlayer = React.forwardRef<
             onPause?.();
           }}
           onEnded={() => onEnded?.()}
+          onError={() => onError?.()}
           onVolumeChange={() => {
             if (videoRef.current) {
               setVolume(videoRef.current.volume);

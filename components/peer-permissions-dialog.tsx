@@ -24,7 +24,6 @@ export function PeerPermissionsDialog({
   const { roomState, currentUser, kick, updatePermissions } = useRoom();
   const users = roomState?.users || [];
   const permissions = roomState?.permissions;
-  const isHost = currentUser?.isHost ?? false;
 
   const [chatEnabled, setChatEnabled] = useState(
     permissions?.viewersCanChat ?? true,
@@ -57,7 +56,7 @@ export function PeerPermissionsDialog({
 
   const handleKick = (userId: string, displayName: string) => {
     kick(userId);
-    toast.success(`Kicked ${displayName}`);
+    toast.success(`Removed ${displayName}`);
   };
 
   return (
@@ -66,12 +65,11 @@ export function PeerPermissionsDialog({
       <DialogContent className="sm:max-w-2xl bg-[#FFFFFF] dark:bg-[#0A0A0A] border-[#E5E7EB] dark:border-[#1F1F23] p-0 overflow-hidden flex flex-col max-h-[90vh]">
         <DialogHeader className="px-6 py-5 border-b border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50/50 dark:bg-[#111111]/50 text-left">
           <DialogTitle className="text-lg font-bold text-[#111827] dark:text-[#EDEDED] tracking-tight">
-            Peer Permissions
+            Room Permissions
           </DialogTitle>
           <DialogDescription className="text-xs text-[#6B7280] dark:text-[#A1A1AA] mt-1">
-            {isHost
-              ? "Manage access control and participant capabilities."
-              : "View current room permissions. Only the host can change settings."}
+            Manage access control and participant capabilities. All members can
+            modify settings.
           </DialogDescription>
         </DialogHeader>
 
@@ -80,7 +78,7 @@ export function PeerPermissionsDialog({
           <div className="px-6 py-6 border-b border-[#E5E7EB] dark:border-[#1F1F23]">
             <h3 className="text-xs font-bold text-[#111827] dark:text-[#EDEDED] uppercase tracking-wider mb-4 flex items-center gap-2">
               <Settings2 size={16} />
-              Global Permissions
+              Room Permissions
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -96,7 +94,6 @@ export function PeerPermissionsDialog({
                 <Switch
                   checked={chatEnabled}
                   onCheckedChange={setChatEnabled}
-                  disabled={!isHost}
                 />
               </div>
 
@@ -106,13 +103,12 @@ export function PeerPermissionsDialog({
                     Playback Control
                   </span>
                   <span className="text-[10px] text-[#6B7280] dark:text-[#A1A1AA]">
-                    Viewers can pause/seek
+                    Participants can pause/seek
                   </span>
                 </div>
                 <Switch
                   checked={controlEnabled}
                   onCheckedChange={setControlEnabled}
-                  disabled={!isHost}
                 />
               </div>
             </div>
@@ -133,7 +129,6 @@ export function PeerPermissionsDialog({
                 <thead className="bg-gray-50/50 dark:bg-[#111111]/50 text-[10px] uppercase text-[#6B7280] dark:text-[#A1A1AA] font-bold tracking-widest border-b border-[#E5E7EB] dark:border-[#1F1F23]">
                   <tr>
                     <th className="px-4 py-3 font-semibold">User</th>
-                    <th className="px-4 py-3 font-semibold w-32">Role</th>
                     <th className="px-4 py-3 font-semibold text-right w-24">
                       Actions
                     </th>
@@ -170,16 +165,8 @@ export function PeerPermissionsDialog({
                             )}
                           </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <Badge
-                            variant="outline"
-                            className={`text-[10px] ${user.isHost ? "border-amber-500/30 text-amber-500" : "border-gray-300 dark:border-gray-700 text-[#6B7280]"}`}
-                          >
-                            {user.isHost ? "Host" : "Viewer"}
-                          </Badge>
-                        </td>
                         <td className="px-4 py-3 text-right">
-                          {isHost && !user.isHost && (
+                          {!isMe && (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -201,20 +188,18 @@ export function PeerPermissionsDialog({
           </div>
         </div>
 
-        {isHost && (
-          <div className="px-6 py-4 border-t border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50/50 dark:bg-[#111111]/50 flex justify-end gap-3">
-            <Button
-              variant="ghost"
-              onClick={() => setOpen(false)}
-              className="text-xs"
-            >
-              Cancel
-            </Button>
-            <Button onClick={handleSave} className="text-xs">
-              Save Changes
-            </Button>
-          </div>
-        )}
+        <div className="px-6 py-4 border-t border-[#E5E7EB] dark:border-[#1F1F23] bg-gray-50/50 dark:bg-[#111111]/50 flex justify-end gap-3">
+          <Button
+            variant="ghost"
+            onClick={() => setOpen(false)}
+            className="text-xs"
+          >
+            Cancel
+          </Button>
+          <Button onClick={handleSave} className="text-xs">
+            Save Changes
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   );

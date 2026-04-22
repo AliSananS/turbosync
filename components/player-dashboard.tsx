@@ -9,6 +9,7 @@ import {
   type LocalVideoPlayerHandle,
 } from "@/components/local-video-player";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import {
   Sun,
   Moon,
@@ -33,12 +34,72 @@ import {
   Crown,
   MonitorPlay,
   Activity,
+  Zap,
+  RefreshCw,
 } from "lucide-react";
 
-import { type User } from "@/types";
+import type { User, SyncProgress, SyncStatus } from "@/types";
+
+// Sync configuration
+const SYNC_CONFIG = {
+  SEEK_THRESHOLD: 5, // seconds - seek immediately if drift > this
+  CATCHUP_THRESHOLD: 2, // seconds - use playback rate if drift > this
+  SYNC_CHECK_INTERVAL: 1000, // ms - how often to check drift
+  PAUSE_SEEK_THRESHOLD: 1, // seconds - seek on pause if someone is ahead by this much
+  NORMAL_RATE: 1.0,
+  CATCHUP_RATE: 1.2,
+  CATCHUP_SLOW_RATE: 1.1,
+  SLOWDOWN_RATE: 0.9,
+};
+
+// Helper to get sync status display info
+function getSyncStatusInfo(status: SyncStatus): {
+  label: string;
+  color: string;
+  icon: React.ReactNode;
+} {
+  switch (status) {
+    case "synced":
+      return {
+        label: "Synced",
+        color: "text-green-600 dark:text-green-400",
+        icon: <Activity size={12} />,
+      };
+    case "catching-up":
+      return {
+        label: "Catching up",
+        color: "text-amber-600 dark:text-amber-400",
+        icon: <Zap size={12} />,
+      };
+    case "seeking":
+      return {
+        label: "Seeking",
+        color: "text-blue-600 dark:text-blue-400",
+        icon: <RefreshCw size={12} className="animate-spin" />,
+      };
+    case "behind":
+      return {
+        label: "Behind",
+        color: "text-orange-600 dark:text-orange-400",
+        icon: <Clock size={12} />,
+      };
+    case "ahead":
+      return {
+        label: "Ahead",
+        color: "text-purple-600 dark:text-purple-400",
+        icon: <Clock size={12} />,
+      };
+    default:
+      return {
+        label: "Unknown",
+        color: "text-gray-600 dark:text-gray-400",
+        icon: <Activity size={12} />,
+      };
+  }
+}
 
 /* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
+/* Helpers */
 /* ------------------------------------------------------------------ */
 
 function formatTimestamp(seconds?: number): string {
@@ -53,7 +114,7 @@ function formatTimestamp(seconds?: number): string {
 }
 
 /* ------------------------------------------------------------------ */
-/*  ActiveMembersTable                                                 */
+/* ActiveMembersTable */
 /* ------------------------------------------------------------------ */
 
 function ActiveMembersTable({
@@ -62,12 +123,14 @@ function ActiveMembersTable({
   latency,
   isConnected,
   roomState,
+  syncProgress,
 }: {
   activeUsers: User[];
   currentUser: User | null;
   latency: number;
   isConnected: boolean;
-  roomState: any; // Assuming roomState is passed down
+  roomState: any;
+  syncProgress: SyncProgress | null;
 }) {
   return (
     <div className="bg-[#FFFFFF] dark:bg-[#0A0A0A] border border-[#E5E7EB] dark:border-[#1F1F23] rounded-xl shadow-sm overflow-hidden flex flex-col relative">
@@ -83,12 +146,10 @@ function ActiveMembersTable({
 
         <div className="flex gap-2">
           <PeerPermissionsDialog>
-            {currentUser?.isHost && (
-              <button className="px-3 py-1.5 bg-white dark:bg-[#111111] border border-[#E5E7EB] dark:border-[#1F1F23] rounded text-[10px] font-bold text-[#6B7280] dark:text-[#A1A1AA] hover:border-gray-300 dark:hover:border-gray-600 transition-colors flex items-center gap-1.5 uppercase tracking-wide">
-                <Filter size={14} />
-                Manage
-              </button>
-            )}
+            <button className="px-3 py-1.5 bg-white dark:bg-[#111111] border border-[#E5E7EB] dark:border-[#1F1F23] rounded text-[10px] font-bold text-[#6B7280] dark:text-[#A1A1AA] hover:border-gray-300 dark:hover:border-gray-600 transition-colors flex items-center gap-1.5 uppercase tracking-wide">
+              <Filter size={14} />
+              Manage
+            </button>
           </PeerPermissionsDialog>
         </div>
       </div>
@@ -130,12 +191,8 @@ function ActiveMembersTable({
                   const isMe = user.id === currentUser?.id;
                   const isOnline = user.connectionStatus === "online";
 
-                  // For the current user, show the live data from context rather than the broadcasted state
-                  const userPing = isMe
-                    ? latency
-                    : isOnline
-                      ? Math.floor(Math.random() * 40) + 20
-                      : 0; // Simplified ping display since we only have true latency for current user
+                  // Show actual latency if available, otherwise show "calculating"
+                  const userPing = user.latency ?? (isMe ? latency : undefined);
                   const displayTime = isMe
                     ? roomState.currentTime
                     : user.videoTimestamp;
@@ -161,17 +218,6 @@ function ActiveMembersTable({
                                   YOU
                                 </Badge>
                               )}
-                              {user.isHost && (
-                                <Badge
-                                  variant="outline"
-                                  className="text-[8px] h-4 px-1 py-0 border-amber-500/30 text-amber-500"
-                                >
-                                  HOST
-                                </Badge>
-                              )}
-                            </div>
-                            <div className="text-[10px] text-[#6B7280] dark:text-[#A1A1AA]">
-                              {user.isHost ? "Host" : "Viewer"}
                             </div>
                           </div>
                         </div>
@@ -219,9 +265,6 @@ function ActiveMembersTable({
                         <div className="flex items-center gap-2">
                           {isOnline ? (
                             <div className="flex items-center gap-2">
-                              {user.isHost && (
-                                <Crown size={12} className="text-amber-500" />
-                              )}
                               <div className="font-mono text-xs text-[#111111] dark:text-[#EDEDED] bg-gray-100 dark:bg-[#111111] px-2 py-1 rounded-md">
                                 {formatTimestamp(displayTime || 0)}
                               </div>
@@ -253,7 +296,7 @@ function ActiveMembersTable({
 }
 
 /* ------------------------------------------------------------------ */
-/*  DashboardHeader                                                    */
+/* DashboardHeader */
 /* ------------------------------------------------------------------ */
 
 function DashboardHeader({
@@ -304,7 +347,7 @@ function DashboardHeader({
 }
 
 /* ------------------------------------------------------------------ */
-/*  PlayerDashboard (main export)                                      */
+/* PlayerDashboard (main export) */
 /* ------------------------------------------------------------------ */
 
 export function PlayerDashboard() {
@@ -679,7 +722,7 @@ export function PlayerDashboard() {
               <div className="text-[10px] text-[#6B7280] dark:text-[#A1A1AA] font-medium">
                 {roomState?.permissions?.viewersCanControl
                   ? "All users can control playback"
-                  : "Host-only playback control"}
+                  : "Playback control is disabled"}
               </div>
             </div>
           </div>
@@ -692,6 +735,7 @@ export function PlayerDashboard() {
           isConnected={isConnected}
           latency={latency}
           roomState={roomState}
+          syncProgress={null}
         />
       </main>
     </div>
