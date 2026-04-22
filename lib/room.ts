@@ -102,6 +102,7 @@ export class Room extends DurableObject<Env> {
       password?: string;
       permissions: RoomPermissions;
       videoUrl?: string;
+      subtitleUrl?: string;
       createdAt: number;
       lastActivityAt: number;
     }
@@ -311,6 +312,9 @@ export class Room extends DurableObject<Env> {
         break;
       case "video-url":
         await this.handleVideoUrlUpdate(ws, session, parsed.url);
+        break;
+      case "subtitle-url":
+        await this.handleSubtitleUrlUpdate(session, parsed.url);
         break;
       case "video-loaded":
         session.hasVideoLoaded = true;
@@ -625,10 +629,27 @@ export class Room extends DurableObject<Env> {
     session: SessionAttachment,
     url: string,
   ): Promise<void> {
+    for (const currentSession of this.sessions.values()) {
+      currentSession.hasVideoLoaded = false;
+    }
+
     // Store the video URL and broadcast to all users
     await this.ctx.storage.put("videoUrl", url);
     this.broadcast({
       type: "video-url",
+      url,
+      userId: session.userId,
+      displayName: session.displayName,
+    });
+  }
+
+  private async handleSubtitleUrlUpdate(
+    session: SessionAttachment,
+    url: string,
+  ): Promise<void> {
+    await this.ctx.storage.put("subtitleUrl", url);
+    this.broadcast({
+      type: "subtitle-url",
       url,
       userId: session.userId,
       displayName: session.displayName,
@@ -664,7 +685,7 @@ export class Room extends DurableObject<Env> {
 
   /** Build a Room snapshot from storage + active sessions */
   private async buildRoomSnapshot(): Promise<RoomState> {
-    const [name, paused, currentTime, playbackRate, permissions, videoUrl] =
+    const [name, paused, currentTime, playbackRate, permissions, videoUrl, subtitleUrl] =
       await Promise.all([
         this.ctx.storage.get<string>("name"),
         this.ctx.storage.get<boolean>("paused"),
@@ -672,6 +693,7 @@ export class Room extends DurableObject<Env> {
         this.ctx.storage.get<number>("playbackRate"),
         this.getPermissions(),
         this.ctx.storage.get<string>("videoUrl"),
+        this.ctx.storage.get<string>("subtitleUrl"),
       ]);
 
     const users: User[] = [];
@@ -688,6 +710,7 @@ export class Room extends DurableObject<Env> {
       playbackRate: playbackRate ?? 1,
       permissions,
       videoUrl,
+      subtitleUrl,
     };
   }
 

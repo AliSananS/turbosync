@@ -46,6 +46,8 @@ export interface RoomState {
   permissions: RoomPermissions;
   /** Current shared video URL */
   videoUrl?: string;
+  /** Current shared subtitle URL */
+  subtitleUrl?: string;
 }
 
 // ─── Sync State ─────────────────────────────────────────────────────
@@ -101,6 +103,7 @@ export type WSClientMessage =
     }
   | { type: "ping"; timestamp: number }
   | { type: "video-url"; url: string }
+  | { type: "subtitle-url"; url: string }
   | { type: "video-loaded" };
 
 // ─── WebSocket: Server → Client ────────────────────────────────────
@@ -123,6 +126,7 @@ export type WSServerMessage =
   | { type: "pong"; timestamp: number }
   | { type: "user-latency-update"; userId: string; latency: number }
   | { type: "video-url"; url: string; userId: string; displayName: string };
+  | { type: "subtitle-url"; url: string; userId: string; displayName: string };
 
 // ─── REST API ──────────────────────────────────────────────────────
 

@@ -65,9 +65,12 @@ interface RoomContextType {
   forceReconnect: () => void;
   // Video URL
   setVideoUrl: (url: string) => void;
+  setSubtitleUrl: (url: string) => void;
   reportVideoLoaded: () => void;
   pendingVideoUrl: string | null;
+  pendingSubtitleUrl: string | null;
   clearPendingVideoUrl: () => void;
+  clearPendingSubtitleUrl: () => void;
 }
 
 const RoomContext = createContext<RoomContextType | undefined>(undefined);
@@ -508,6 +511,10 @@ export function RoomProvider({ children }: { children: ReactNode }) {
                 return {
                   ...prev,
                   videoUrl: msg.url,
+                  users: prev.users.map((u) => ({
+                    ...u,
+                    hasVideoLoaded: false,
+                  })),
                 };
               });
               break;
@@ -520,6 +527,22 @@ export function RoomProvider({ children }: { children: ReactNode }) {
                   users: prev.users.map((u) =>
                     u.id === msg.userId ? { ...u, hasVideoLoaded: true } : u,
                   ),
+                };
+              });
+              break;
+
+            case "subtitle-url":
+              setRoomState((prev) => {
+                if (!prev) return null;
+                if (prev.subtitleUrl !== msg.url) {
+                  setPendingSubtitleUrl(msg.url);
+                  toast.info(`${msg.displayName} shared subtitles`, {
+                    description: "Load them from the player controls",
+                  });
+                }
+                return {
+                  ...prev,
+                  subtitleUrl: msg.url,
                 };
               });
               break;
@@ -675,7 +698,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
 
   const syncRequest = useCallback(() => {
     sendWS({ type: "sync-request" });
-  }, [sendWS]);
+  }, [currentUser, sendWS]);
 
   const kick = useCallback(
     (userId: string) => {
@@ -701,7 +724,26 @@ export function RoomProvider({ children }: { children: ReactNode }) {
   const setVideoUrl = useCallback(
     (url: string) => {
       sendWS({ type: "video-url", url });
-      setRoomState((prev) => (prev ? { ...prev, videoUrl: url } : null));
+      setRoomState((prev) =>
+        prev
+          ? {
+              ...prev,
+              videoUrl: url,
+              users: prev.users.map((u) => ({
+                ...u,
+                hasVideoLoaded: false,
+              })),
+            }
+          : null,
+      );
+    },
+    [sendWS],
+  );
+
+  const setSubtitleUrl = useCallback(
+    (url: string) => {
+      sendWS({ type: "subtitle-url", url });
+      setRoomState((prev) => (prev ? { ...prev, subtitleUrl: url } : null));
     },
     [sendWS],
   );
@@ -709,13 +751,28 @@ export function RoomProvider({ children }: { children: ReactNode }) {
   // Report video loaded to room
   const reportVideoLoaded = useCallback(() => {
     sendWS({ type: "video-loaded" });
+    setRoomState((prev) => {
+      if (!prev || !currentUser) return prev;
+      return {
+        ...prev,
+        users: prev.users.map((u) =>
+          u.id === currentUser.id ? { ...u, hasVideoLoaded: true } : u,
+        ),
+      };
+    });
   }, [sendWS]);
 
   // Pending video URL state (for shared videos)
   const [pendingVideoUrl, setPendingVideoUrl] = useState<string | null>(null);
+  const [pendingSubtitleUrl, setPendingSubtitleUrl] =
+    useState<string | null>(null);
 
   const clearPendingVideoUrl = useCallback(() => {
     setPendingVideoUrl(null);
+  }, []);
+
+  const clearPendingSubtitleUrl = useCallback(() => {
+    setPendingSubtitleUrl(null);
   }, []);
 
   // Sync progress calculation - can be called by components
@@ -792,9 +849,12 @@ export function RoomProvider({ children }: { children: ReactNode }) {
         forceReconnect,
         // Video URL
         setVideoUrl,
+        setSubtitleUrl,
         reportVideoLoaded,
         pendingVideoUrl,
+        pendingSubtitleUrl,
         clearPendingVideoUrl,
+        clearPendingSubtitleUrl,
       }}
     >
       {children}

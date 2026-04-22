@@ -456,6 +456,11 @@ export function PlayerDashboard() {
   useEffect(() => {
     if (!roomState || !playerRef.current) return;
 
+    const playerDuration = playerRef.current.getDuration();
+    if (!Number.isFinite(playerDuration) || playerDuration <= 0) {
+      return;
+    }
+
     syncingRef.current = true;
 
     const localPaused = playerRef.current.isPaused();
