@@ -36,6 +36,8 @@ import {
   Activity,
   Zap,
   RefreshCw,
+  Film,
+  Loader2,
 } from "lucide-react";
 
 import type { User, SyncProgress, SyncStatus } from "@/types";
@@ -165,6 +167,9 @@ function ActiveMembersTable({
                 Status
               </th>
               <th className="px-5 py-3" scope="col">
+                Video
+              </th>
+              <th className="px-5 py-3" scope="col">
                 Timeline Sync
               </th>
             </tr>
@@ -173,7 +178,7 @@ function ActiveMembersTable({
             {activeUsers.length === 0 ? (
               <tr>
                 <td
-                  colSpan={3}
+                  colSpan={4}
                   className="px-5 py-8 text-center text-[#6B7280] dark:text-[#A1A1AA]"
                 >
                   Waiting for peers to join...
@@ -258,6 +263,29 @@ function ActiveMembersTable({
                             </div>
                           )}
                         </div>
+                      </td>
+
+                      {/* Video Load Status */}
+                      <td className="px-5 py-3">
+                        {isOnline ? (
+                          <div className="flex items-center gap-1.5">
+                            {user.hasVideoLoaded ? (
+                              <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-500/10 text-green-600 dark:text-green-400">
+                                <Film size={12} />
+                                <span className="text-[10px] font-medium">Loaded</span>
+                              </div>
+                            ) : roomState.videoUrl ? (
+                              <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                                <Loader2 size={12} className="animate-spin" />
+                                <span className="text-[10px] font-medium">Loading</span>
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-[#999]">No video</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-[#999] opacity-50">-</span>
+                        )}
                       </td>
 
                       {/* Timeline Sync */}
@@ -527,6 +555,7 @@ export function PlayerDashboard() {
                 percent: d > 0 ? (t / d) * 100 : 0,
               })
             }
+            onVideoSrcChange={(hasVideo) => setHasVideo(hasVideo)}
           />
 
           {/* Custom Control Bar (below video) */}

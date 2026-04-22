@@ -18,6 +18,18 @@ import type {
 } from "@/types";
 import { toast } from "sonner";
 
+// Helper to format timestamp for toasts
+function formatTimestamp(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "--:--";
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  if (hrs > 0) {
+    return `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  }
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
 // Extended context type with sync info
 interface RoomContextType {
   roomState: RoomState | null;
@@ -53,6 +65,7 @@ interface RoomContextType {
   forceReconnect: () => void;
   // Video URL
   setVideoUrl: (url: string) => void;
+  reportVideoLoaded: () => void;
   pendingVideoUrl: string | null;
   clearPendingVideoUrl: () => void;
 }
@@ -408,6 +421,10 @@ export function RoomProvider({ children }: { children: ReactNode }) {
                   ? { ...prev, paused: false, currentTime: msg.currentTime }
                   : null,
               );
+              // Show toast if not from self
+              if (msg.userId !== currentUser?.id) {
+                toast.info(`${msg.displayName} played the video`);
+              }
               break;
 
             case "pause":
@@ -415,12 +432,20 @@ export function RoomProvider({ children }: { children: ReactNode }) {
                 if (!prev) return null;
                 return { ...prev, paused: true, currentTime: msg.currentTime };
               });
+              // Show toast if not from self
+              if (msg.userId !== currentUser?.id) {
+                toast.info(`${msg.displayName} paused the video`);
+              }
               break;
 
             case "seek":
               setRoomState((prev) =>
                 prev ? { ...prev, currentTime: msg.currentTime } : null,
               );
+              // Show toast if not from self
+              if (msg.userId !== currentUser?.id) {
+                toast.info(`${msg.displayName} seeked to ${formatTimestamp(msg.currentTime)}`);
+              }
               break;
 
             case "playback-rate":
@@ -483,6 +508,18 @@ export function RoomProvider({ children }: { children: ReactNode }) {
                 return {
                   ...prev,
                   videoUrl: msg.url,
+                };
+              });
+              break;
+
+            case "video-loaded":
+              setRoomState((prev) => {
+                if (!prev) return null;
+                return {
+                  ...prev,
+                  users: prev.users.map((u) =>
+                    u.id === msg.userId ? { ...u, hasVideoLoaded: true } : u,
+                  ),
                 };
               });
               break;
@@ -669,6 +706,11 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     [sendWS],
   );
 
+  // Report video loaded to room
+  const reportVideoLoaded = useCallback(() => {
+    sendWS({ type: "video-loaded" });
+  }, [sendWS]);
+
   // Pending video URL state (for shared videos)
   const [pendingVideoUrl, setPendingVideoUrl] = useState<string | null>(null);
 
@@ -750,6 +792,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
         forceReconnect,
         // Video URL
         setVideoUrl,
+        reportVideoLoaded,
         pendingVideoUrl,
         clearPendingVideoUrl,
       }}

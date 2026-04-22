@@ -98,6 +98,8 @@ export interface LocalVideoPlayerProps {
   onTimeUpdate?: (currentTime: number, duration: number) => void;
   /** Called when metadata loads (resolution available) */
   onLoadedMetadata?: () => void;
+  /** Called when video src is set (for reporting loaded status) */
+  onVideoSrcChange?: (hasVideo: boolean) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -188,12 +190,25 @@ export const LocalVideoPlayer = forwardRef<
   LocalVideoPlayerProps
 >(
   (
-    { roomId, onPlay, onPause, onSeek, onTimeUpdate, onLoadedMetadata },
+    {
+      roomId,
+      onPlay,
+      onPause,
+      onSeek,
+      onTimeUpdate,
+      onLoadedMetadata,
+      onVideoSrcChange,
+    },
     ref,
   ) => {
     const playerRef = useRef<VideoPlayerHandle>(null);
-    const { roomState, setVideoUrl, pendingVideoUrl, clearPendingVideoUrl } =
-      useRoom();
+    const {
+      roomState,
+      setVideoUrl,
+      reportVideoLoaded,
+      pendingVideoUrl,
+      clearPendingVideoUrl,
+    } = useRoom();
 
     const [videoSrc, setVideoSrc] = useState<string | null>(null);
     const [subtitleSrc, setSubtitleSrc] = useState<string | null>(null);
@@ -265,8 +280,11 @@ export const LocalVideoPlayer = forwardRef<
         } else {
           toast.info("Restored previous video", { description: file.name });
         }
+        // Report video loaded to room
+        reportVideoLoaded();
+        onVideoSrcChange?.(true);
       },
-      [roomId],
+      [roomId, reportVideoLoaded, onVideoSrcChange],
     );
 
     const handleSubtitleFile = useCallback((file: File) => {
@@ -367,8 +385,11 @@ export const LocalVideoPlayer = forwardRef<
         });
         setIsLoadingUrl(false);
         setSourceMode("url");
+        // Report video loaded to room
+        reportVideoLoaded();
+        onVideoSrcChange?.(true);
       },
-      [videoUrlInput],
+      [videoUrlInput, reportVideoLoaded, onVideoSrcChange],
     );
 
     const handleSubtitleUrl = useCallback(() => {

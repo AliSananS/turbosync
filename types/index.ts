@@ -22,6 +22,10 @@ export interface User {
   videoTimestamp?: number;
   /** Latency in milliseconds (measured via ping/pong) */
   latency?: number;
+  /** Timestamp when user was last seen (for auto-removal) */
+  lastSeen?: number;
+  /** Video loaded status - true if user has loaded the shared video */
+  hasVideoLoaded?: boolean;
 }
 
 // ─── Room ──────────────────────────────────────────────────────────
@@ -96,17 +100,19 @@ export type WSClientMessage =
       permissions: Partial<RoomPermissions>;
     }
   | { type: "ping"; timestamp: number }
-  | { type: "video-url"; url: string };
+  | { type: "video-url"; url: string }
+  | { type: "video-loaded" };
 
 // ─── WebSocket: Server → Client ────────────────────────────────────
 
 export type WSServerMessage =
   | { type: "user-joined"; user: User }
   | { type: "user-left"; userId: string }
-  | { type: "play"; currentTime: number; userId: string }
-  | { type: "pause"; currentTime: number; userId: string }
-  | { type: "seek"; currentTime: number; userId: string }
+  | { type: "play"; currentTime: number; userId: string; displayName: string }
+  | { type: "pause"; currentTime: number; userId: string; displayName: string }
+  | { type: "seek"; currentTime: number; userId: string; displayName: string }
   | { type: "chat"; message: string; userId: string; displayName: string }
+  | { type: "video-loaded"; userId: string; displayName: string }
   | { type: "sync"; room: RoomState }
   | { type: "error"; code: string; message: string; retryAfter?: number }
   | { type: "room-state"; room: RoomState; yourUserId: string }

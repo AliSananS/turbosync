@@ -34,6 +34,10 @@ interface SessionAttachment {
   latency?: number;
   /** Rate limit tracking - using plain object for serialization */
   rateLimitInfo?: RateLimitInfo;
+  /** Timestamp when user was last seen (for auto-removal) */
+  lastSeen: number;
+  /** Whether user has loaded the shared video */
+  hasVideoLoaded: boolean;
 }
 
 interface RateLimitInfo {
@@ -47,6 +51,9 @@ const DEFAULT_PERMISSIONS: RoomPermissions = {
   viewersCanControl: true,
   viewersCanChat: true,
 };
+
+// ─── User timeout settings ─────────────────────────────────────
+const USER_OFFLINE_TIMEOUT_MS = 30 * 1000; // 30 seconds without messages = offline
 
 // ─── Room deletion settings ────────────────────────────────────────
 const ROOM_INACTIVITY_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -140,6 +147,9 @@ export class Room extends DurableObject<Env> {
 
   // ─── Alarm handler for room cleanup ──────────────────────────────
   async alarm(): Promise<void> {
+    // Check for offline users first
+    await this.removeOfflineUsers();
+
     // Check if room has users connected
     if (this.sessions.size === 0) {
       // No users connected - check if it's been inactive for 24 hours
@@ -184,6 +194,8 @@ export class Room extends DurableObject<Env> {
       userId,
       peerId: "", // Will be set on Join
       displayName: "Anonymous",
+      lastSeen: Date.now(),
+      hasVideoLoaded: false,
     };
     server.serializeAttachment(attachment);
     this.sessions.set(server, attachment);
@@ -215,6 +227,9 @@ export class Room extends DurableObject<Env> {
 
     const session = this.sessions.get(ws);
     if (!session) return;
+
+    // Update lastSeen on any message
+    session.lastSeen = Date.now();
 
     // Check rate limits
     if (this.isRateLimited(session, parsed.type)) {
@@ -297,6 +312,17 @@ export class Room extends DurableObject<Env> {
       case "video-url":
         await this.handleVideoUrlUpdate(ws, session, parsed.url);
         break;
+      case "video-loaded":
+        session.hasVideoLoaded = true;
+        this.broadcast(
+          {
+            type: "video-loaded",
+            userId: session.userId,
+            displayName: session.displayName,
+          },
+          ws,
+        );
+        break;
       default:
         this.send(ws, {
           type: "error",
@@ -328,6 +354,8 @@ export class Room extends DurableObject<Env> {
 
     // Update activity and check if we should schedule cleanup
     await this.updateActivity();
+    // Clean up offline users
+    await this.removeOfflineUsers();
   }
 
   // ─── WebSocket error handler ────────────────────────────────────
@@ -340,6 +368,8 @@ export class Room extends DurableObject<Env> {
     }
 
     await this.updateActivity();
+    // Clean up offline users
+    await this.removeOfflineUsers();
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -471,7 +501,12 @@ export class Room extends DurableObject<Env> {
       case "play":
         await this.ctx.storage.put({ paused: false, currentTime });
         this.broadcast(
-          { type: "play", currentTime, userId: session.userId },
+          {
+            type: "play",
+            currentTime,
+            userId: session.userId,
+            displayName: session.displayName,
+          },
           ws,
         );
         break;
@@ -480,7 +515,12 @@ export class Room extends DurableObject<Env> {
         const furthestTime = this.getFurthestUserTime(currentTime);
         await this.ctx.storage.put({ paused: true, currentTime: furthestTime });
         this.broadcast(
-          { type: "pause", currentTime: furthestTime, userId: session.userId },
+          {
+            type: "pause",
+            currentTime: furthestTime,
+            userId: session.userId,
+            displayName: session.displayName,
+          },
           ws,
         );
         break;
@@ -488,7 +528,12 @@ export class Room extends DurableObject<Env> {
       case "seek":
         await this.ctx.storage.put("currentTime", currentTime);
         this.broadcast(
-          { type: "seek", currentTime, userId: session.userId },
+          {
+            type: "seek",
+            currentTime,
+            userId: session.userId,
+            displayName: session.displayName,
+          },
           ws,
         );
         break;
@@ -646,6 +691,23 @@ export class Room extends DurableObject<Env> {
     };
   }
 
+  /** Remove users who haven't sent messages in USER_OFFLINE_TIMEOUT_MS */
+  private async removeOfflineUsers(): Promise<void> {
+    const now = Date.now();
+    const offlineUsers: string[] = [];
+
+    for (const [ws, session] of this.sessions.entries()) {
+      if (now - session.lastSeen > USER_OFFLINE_TIMEOUT_MS) {
+        offlineUsers.push(session.userId);
+        this.sessions.delete(ws);
+        try {
+          ws.close(1000, "Idle timeout");
+        } catch {}
+        this.broadcast({ type: "user-left", userId: session.userId });
+      }
+    }
+  }
+
   /** Convert a session attachment to a User */
   private sessionToUser(session: SessionAttachment): User {
     return {
@@ -656,6 +718,8 @@ export class Room extends DurableObject<Env> {
       connectionStatus: "online",
       videoTimestamp: session.videoTimestamp,
       latency: session.latency,
+      lastSeen: session.lastSeen,
+      hasVideoLoaded: session.hasVideoLoaded,
     };
   }
 }
